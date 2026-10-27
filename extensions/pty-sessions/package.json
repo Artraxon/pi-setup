@@ -1,0 +1,9 @@
+{
+  "name": "pi-pty-sessions",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@xterm/headless": "6.0.0",
+    "node-pty": "1.1.0"
+  }
+}
