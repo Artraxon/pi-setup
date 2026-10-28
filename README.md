@@ -119,6 +119,20 @@ Inline Markdown links to existing project files open in the current CLion projec
 No visible file-list widget is added. Coordinates such as `:line:column` and
 `#Lline` are preserved.
 
+On every agent turn, the extension contributes a dedicated system-prompt section
+requiring CLion-compatible Markdown links for existing project-file references
+in prose. It does not replace other system instructions. A display-only Markdown
+transform also converts bare or backticked project-file references into those
+links, including during streaming. Commands, fenced/indented code, literal inline
+commands, existing Markdown links, user messages, thinking and raw tool output
+remain unchanged. This is navigation formatting, not automatic IDE opening.
+
+The display transform and click interception target Pi's terminal UI. Other
+frontends receive the prompt guidance, but their link handling is frontend-owned.
+Directories, missing/outside-project paths and external web URLs are not converted
+into purported working CLion links. This is best-effort formatting, not censorship
+or a byte-level prohibition on literal paths in commands and logs.
+
 - **Alt+K / Alt+J** navigates rendered project-file links, starting with the latest.
 - Selected links use reverse video and scroll into view; web links are skipped.
 - **Enter** opens the selected file; **Escape** cancels without changing the prompt.

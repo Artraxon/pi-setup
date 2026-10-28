@@ -15,6 +15,9 @@ export function extractFileReferences(text: string, projectPath: string): FileRe
 	const references = new Map<string, FileReference>();
 	const prose = text.replace(/^\s*(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\s*\1\s*$/gm, "");
 	const candidates = [
+		// URL dispatch supplies only the target, including extensionless files
+		// and paths with spaces, rather than the original Markdown link.
+		[prose.trim(), prose.trim()],
 		...prose.matchAll(/\[[^\]\n]*\]\(<?([^\s)>]+)>?(?:\s+"[^"\n]*")?\)/g),
 		...prose.matchAll(/`([^`\n]+)`/g),
 		...prose.matchAll(/([^\s`<>"()[\]{}]*[/.][^\s`<>"()[\]{}]+)/g),

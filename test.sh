@@ -8,12 +8,14 @@ node --test \
     extensions/shell-colors/sgr.test.mjs \
     extensions/message-selection/index.test.mjs \
     extensions/clion-file-actions/link-navigation.test.mjs \
+    extensions/clion-file-actions/index.test.mjs \
     extensions/extract/index.test.mjs \
     extensions/extract/settings.test.mjs \
     extensions/extract/paste.test.mjs \
     extensions/extract/tool.test.mjs
 node --experimental-strip-types --test \
     extensions/clion-file-actions/clion.test.ts \
+    extensions/clion-file-actions/references.test.ts \
     extensions/output-editor/index.test.ts \
     extensions/extract/core.test.ts \
     extensions/extract/editor.test.ts

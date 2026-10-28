@@ -8,6 +8,7 @@ import { extractFileReferences, openInClion, type FileReference } from "./clion.
 
 import { installInlineFileHandler } from "./inline.ts";
 import { installLinkNavigation } from "./link-navigation.ts";
+import { CLION_REFERENCE_GUIDANCE, linkProjectReferences } from "./references.ts";
 
 const WIDGET_KEY = "clion-file-actions";
 
@@ -27,6 +28,14 @@ function assistantText(message: MessageEndEvent["message"]): string | undefined 
 
 export default function clionFileActions(pi: ExtensionAPI) {
 	let references: FileReference[] = [];
+	let projectPath: string | undefined;
+	pi.on("before_agent_start", (event, ctx) => {
+		projectPath = ctx.cwd;
+		event.systemPromptOptions.sections.clion_file_references = CLION_REFERENCE_GUIDANCE;
+	});
+	pi.registerMarkdownTransformer((markdown, context) =>
+		context.messageType === "assistant" && projectPath ? linkProjectReferences(markdown, projectPath) : markdown,
+	);
 	let removeInlineHandler: (() => void) | undefined;
 	let removeLinkNavigation: (() => void) | undefined;
 	pi.on("session_shutdown", () => {
@@ -59,6 +68,7 @@ export default function clionFileActions(pi: ExtensionAPI) {
 	}
 
 	function restore(ctx: ExtensionContext): void {
+		projectPath = ctx.cwd;
 		references = [];
 		const branch = ctx.sessionManager.getBranch();
 		for (let index = branch.length - 1; index >= 0; index--) {

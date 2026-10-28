@@ -15,7 +15,7 @@ install_extension() {
     echo "Installed $name for Pi in $destination"
 }
 
-install_extension clion-file-actions index.ts clion.ts inline.ts link-navigation.ts
+install_extension clion-file-actions index.ts clion.ts inline.ts link-navigation.ts references.ts
 # Remove the helper left behind by the former multi-runtime installer.
 rm -f "$agent_dir/extensions/clion-file-actions/shared.ts"
 install_extension compact-tools index.ts
