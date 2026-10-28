@@ -31,7 +31,7 @@ test('public/private tools, picker keys, foreground detach and shutdown', async 
         on(name, handler) { events.set(name, handler); },
         registerTool(tool) { tools.set(tool.name, tool); },
         registerCommand(name, command) { commands.set(name, command); },
-        registerMessageRenderer(_name, renderer) { previewRenderer = renderer; },
+        registerMessageRenderer(name, renderer) { if (name === 'pty-preview') previewRenderer = renderer; },
         sendMessage(message) { messages.push(message); },
     });
     let stopped = false, menu;

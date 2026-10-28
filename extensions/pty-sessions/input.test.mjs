@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ForegroundInput, interruptForeground } from './input.mjs';
-import { Sessions } from './sessions.mjs';
+import { Sessions } from './sessions.ts';
 
 test('legacy, Kitty and modifyOtherKeys shortcuts, including split sequences', () => {
     let output = '', interrupts = 0, detaches = 0;

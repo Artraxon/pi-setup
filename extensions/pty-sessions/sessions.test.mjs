@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Sessions, screenLines } from './sessions.mjs';
+import { Sessions, screenLines } from './sessions.ts';
 
 async function until(predicate, timeout = 4000) {
     const end = Date.now() + timeout;

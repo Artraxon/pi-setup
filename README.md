@@ -26,9 +26,13 @@ dependencies, and updates keybindings to free Ctrl+J/K for transcript selection.
 Other custom keybindings are preserved.
 
 Run `/reload` after updating extensions. **Save active PTY work first:** reload
-terminates those sessions and clears their in-memory output. The native shell
+terminates all managed processes and clears their retained output/logs. The native shell
 color patch changes Pi runtime files and requires a **Pi restart**, not just
 `/reload`. Rerun the installer after updating Pi.
+
+The changing managed-process backend helpers deliberately use TypeScript: Pi's
+loader refreshes those on reload, whereas native ESM helpers can remain cached
+inside Node and mix old backend code with a new extension entry point.
 
 ## Layout
 
@@ -42,7 +46,8 @@ extensions/
   extract/             Editor capture and extraction with a separate model
   message-selection/   Ctrl+K/J transcript selection into the prompt
   output-editor/       Edit response/block text into the prompt
-  pty-sessions/        Background PTYs, live previews and attachment
+  pty-sessions/        Managed bash processes, background PTYs and attachment
+  shared/              Shared settings integration
   shell-colors/        Native shell-output SGR preservation
   zsh-completion/      Zsh completion bridge for ! and !! input
 ```
@@ -51,52 +56,246 @@ Tests live beside their extension. Dependencies and generated caches are ignored
 The installer copies runtime files only, not test entry points, into Pi's
 extension directories.
 
-## Interactive PTY sessions
+## Managed processes and interactive PTY sessions
 
-User-entered `!`/`!!` commands start **asynchronous background PTYs** rather than
-blocking Pi until exit. Live transcript previews interpret colors, progress
-updates, carriage returns, and standard VT animations using a headless xterm
-terminal emulator. Raw cursor-control sequences are not forwarded into Pi's UI.
+The extension **replaces the model's `bash` tool**. Commands normally run without
+a TTY, with closed stdin and piped stdout/stderr. Short commands return their
+output and exit status normally. After **15 seconds** (default), a still-running
+command returns a background ID without being killed.
+
+### Foreground interval and hard timeouts
+
+Choose **`/settings` → Bash foreground wait** and enter any number of seconds from
+0 to 86400. The value is saved in
+`${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/processes.json` as
+`backgroundAfterSeconds` and applies to subsequent calls immediately. Zero means
+immediate background handoff. The main-settings row uses the same internal Pi
+1.3 hook as Extraction model; contributions share one cleanup-safe hook.
+
+The tool additionally accepts:
+- `yield_after`: override the foreground interval for one call.
+- `timeout`: an optional **hard kill deadline**, which remains active after
+  backgrounding. There is no default hard deadline.
+- `tty: true`: allocate an interactive PTY **at launch**. A pipe process cannot
+  acquire a TTY afterward. Use `yield_after: 0` if the user should attach immediately.
+
+Codemode example (no shell `&` or `nohup` required):
+
+```js
+const job = await tools.bash({ command: "cmake --build build", yield_after: 15 });
+text(job); // background:true and exit_code:null mean still running, not failure
+```
+
+Ordinary foreground results match native Bash: `output`, `truncated`,
+`exit_code`, and `wall_time_seconds` (rounded to 0.1 seconds), with no process
+footer or extra context messages. Empty output and nonzero-exit text also use the
+native format. `full_output_path` is returned only for truncated output.
+Management fields are optional: `background: true` and `id` identify a running
+job; TTY launches and exceptional exits include relevant metadata. False/default
+flags are omitted, except `tty` is explicit in background results. A public log
+can still be found through `pty_snapshot`, even when absent from the Bash result.
+Model-facing output is limited to the last 2000
+lines / 50 KiB; codemode receives up to 1 MiB of recent output. Public processes
+also capture a mode-0600 log in a private temporary directory, capped at **16 MiB**.
+When that cap is exceeded or a write fails, `output_file_truncated: true` means
+the log is **not complete**. Snapshots provide up to 64 Ki characters of recent
+plain output plus the rendered screen and log path.
+
+### Shared process controls
+
+User-entered `!`/`!!` commands still launch **asynchronous interactive PTYs** in
+the terminal UI. All modes share the same registry and stable `pty-N` IDs.
+Live previews interpret colors, carriage returns and terminal animations using a
+headless xterm emulator rather than forwarding raw cursor controls into Pi.
 Previews refresh at most about 12 times/second.
 
 | Control | Action |
 | --- | --- |
 | Ctrl+O | Expand/collapse previews alongside tool output |
-| Ctrl+click a preview | Attach and give the PTY keyboard focus |
-| `/fg [id]` | Attach; default is the most recently used running PTY |
-| Ctrl+Z while attached | Detach without stopping or suspending the program |
-| Ctrl+C while attached | Interrupt that PTY's foreground process group |
-| Ctrl+C in Pi | Normal Pi behavior; detached PTYs are untouched |
+| Ctrl+click a preview | Attach to a TTY or view pipe output |
+| `/fg [id]` | Attach to a TTY; open a read-only live viewer for pipe processes |
+| Ctrl+Z while attached | Detach without stopping/suspending the process |
+| Ctrl+C while attached | Interrupt that session; pipe viewers also support Ctrl+C |
+| Ctrl+C in Pi | Normal Pi behavior; a pending foreground tool is cancelled, already-backgrounded jobs are untouched |
 | `/pty-list` | Recent-first picker: arrows or Ctrl+K/J, Enter selects, Esc closes |
+| `/pty-stop id [SIGTERM\|SIGINT\|SIGKILL]` | Signal a managed process group; default SIGTERM |
 
-Collapsed previews show the most recent eight screen rows (the first eight for
-full-screen applications). Expanded previews show the entire rendered screen and
-up to 2,000 retained scrollback lines. Selecting an exited session opens its final
-screen. Ctrl+Z is reserved for detachment rather than normal Unix job control.
-Kitty and modifyOtherKeys encodings of Ctrl+C/Z are supported.
+Collapsed previews show eight rows for ordinary shell output. Full-screen /
+alternate-screen applications show only process metadata and attach controls,
+not their startup logos/help headers, including after Ctrl+Z. Expanded previews
+still show the screen and up to 2000 retained scrollback lines. Pipe viewers support arrows/PageUp/PageDown to
+scroll and Esc/Enter/Ctrl+Z to close; typing does not send stdin. Selecting an
+exited process shows its retained output. TTY attachment supports Kitty and
+modifyOtherKeys Ctrl+C/Z encodings and interactive/full-screen programs.
 
-Read-only model tools:
+Model tools:
+- **`pty_list`** discovers IDs, TTY/pipe mode, source and status.
+- **`pty_snapshot`** inspects public output/status without attaching or sending input.
+- **`pty_stop`** sends SIGTERM/SIGINT/SIGKILL to a public process group.
+- **`pty_write`** sends raw UTF-8 `data` to a public TTY; `submit: true` appends
+  Enter. Private, exited, pipe and user-attached sessions are denied. Input is
+  limited to 16 KiB. It does not attach or take keyboard focus.
+- **`subagent_result`** is codemode-only: retrieves a public child's saved final
+  answer, not its terminal/history; see the subagent workflow below.
 
-- **`pty_list`** discovers sessions, status and exit information.
-- **`pty_snapshot`** reads the current rendered screen, dimensions, cursor position,
-  timestamp and process status. It does not attach or send input.
+### Exit notifications, privacy and lifetime
 
-Only startup metadata is automatically included in model context, not PTY output.
-Public output is retrieved explicitly through snapshots. `!!` sessions are
-private: model listings redact their commands and snapshots refuse their output.
-You can still attach to private sessions yourself.
+Once a model command has returned in the background, its exit queues one
+`process-exit` message with **`triggerTurn: true, deliverAs: "followUp"`**.
+Public `!` jobs also notify on exit. Notifications contain lifecycle metadata,
+not command output, and do not steer/interrupt a current turn. They can start a
+new agent turn when idle, so normal model usage charges may apply. Foreground
+completions are already returned by `bash` and do not send duplicate notifications.
+Inspect output explicitly through snapshots or the public log.
 
-PTYs live in memory for the current extension runtime. **Exit, reload, or session
-shutdown terminates running PTYs.** They do not survive restarting Pi. Up to 16
-PTYs may run concurrently; the most recent 32 sessions are retained with bounded
-scrollback/logs. Historical preview messages show an unavailable marker after
-reload. Attach only while the agent is idle. Embedded previews do not implement
-mouse interaction or terminal graphics; direct attachment forwards normal
-terminal output and supports interactive/full-screen applications.
+**Private `!!` output stays in memory only:** no disk capture, no exit notification,
+commands redacted from model lists, and model snapshot/stop access denied.
+Users may still attach or stop their own private jobs.
 
-Model-issued Bash calls are unchanged. User PTYs use Pi's configured
-`shellPath`/`shellCommandPrefix` from user/project settings, defaulting to Bash.
-They do not run in the Zsh completion subprocess.
+Processes belong to the current extension runtime. **Exit, reload or session
+shutdown kills running process groups and deletes retained logs.** They do not
+survive Pi restarts. Sixteen jobs may run concurrently; 32 records are retained,
+with old exited/unattached records evicted first. Groups normally cover shell
+children; deliberately daemonized jobs that escape their group are unsupported.
+In Pi Web, the documented liveness registry prevents automatic idle eviction
+while a managed job is running; explicit shutdown still kills it.
+
+All launches honor Pi's user/project `shellPath` and `shellCommandPrefix`, defaulting
+to Bash. Model commands receive current Pi session/model metadata rather than
+stale inherited metadata; `PI_WEB_PASSWORD` is never inherited. The native Zsh
+completion subprocess is not used to execute these jobs.
+
+### Process-to-Pi messages
+
+Every managed launch (model Bash, public `!`, private `!!`, TTY or pipe) receives a
+`pi-process` helper on its `PATH`. Descendants inherit it. No D-Bus, external
+service or new npm dependency is needed:
+
+```sh
+pi-process status "Compiling: 42 / 100 files"
+pi-process notify "Ready for integration tests"
+pi-process status ""  # Clear the latest status
+```
+
+`status` replaces local `statusText`/`statusUpdatedAt`, repaints the process list
+and previews, and **never invokes the agent or adds conversation messages**.
+The latest status appears in explicit `pty_list`/`pty_snapshot` queries and stays
+with the record after exit until eviction. `/pty-list` updates live while open.
+
+`notify` queues an identified **untrusted process-output** message for the main
+agent with `triggerTurn: true, deliverAs: "followUp"`. It does not interrupt the
+current turn. Messages arriving within 100 ms are batched, with at most 32 KiB
+of serialized notification data per batch. Reports stay in the bounded local
+queue while the parent is busy and are dispatched once it is idle, after
+`agent_settled`. At most one batch is outstanding per run. A handoff to
+`pi.sendMessage` is **not** delivery: the exact queued prefix is removed only
+when `message_end` confirms that report entered the transcript. This avoids
+losing notifications when Escape clears Pi's volatile follow-up queue.
+Uncommitted handoffs can retry after settlement or join the next normal run;
+committed reports are not replayed. Notifications can cause model usage charges.
+Status text is not automatically included in these messages. In the transcript,
+notifications render as one width-truncated line with a themed pink `↩` icon,
+process ID and report text—no JSON panel or timestamp block. Ctrl+O explicitly
+expands the complete report text. This is display-only: the agent still receives
+the original identified, untrusted notification payload.
+
+Limits and acknowledgement semantics:
+- Status: 1024 UTF-8 bytes, burst 10 updates, refilling at 10/second per process.
+- Notify: 8192 UTF-8 bytes, burst 3, refilling at 3/minute per process; global burst
+  6, refilling at 6/minute. At most 32 notifications are queued locally.
+- One newline-terminated JSON request and acknowledgement per connection, 64 KiB
+  maximum frame, 32 active connections, 3-second idle/absolute server and client
+  deadlines.
+- Success is silent and means accepted locally, **not** guaranteed LLM delivery
+  or successful handling. Shutdown discards pending messages. The helper exits
+  nonzero on rejection/unavailability, with a short error that does not echo text
+  or credentials. Use backoff or `|| :` for best-effort progress under `set -e`.
+
+A private `!!` process may set a user-visible status, but model queries redact it
+and notifications are rejected with `private_process`. No private status is
+written to a log. Exited/disposed processes cannot send new messages.
+
+The endpoint is one filesystem Unix socket per Pi instance in a short, mode-0700
+`/tmp/pi-ipc-*` directory; the socket is mode 0600. Each launch gets an independent
+random capability token, revoked on exit. `PI_PROCESS_SOCKET`, `PI_PROCESS_TOKEN`
+and `PI_PROCESS_HELPER` identify its endpoint/credential/helper. `PI_PROCESS_ID`,
+`PI_PROCESS_PRIVATE` (`0`/`1`) and `PI_PROCESS_DATA_DIR` identify the owning job
+and its reserved, random workspace path. Ordinary commands allocate no workspace.
+Use
+`"$PI_PROCESS_HELPER" status "text"` if a shell rewrites `PATH`. Never print or
+persist the token. These variables are overwritten for nested managed launches,
+so children of another Pi instance do not accidentally use its credentials.
+This is same-host IPC, designed for Linux and macOS (Linux-tested; native macOS
+validation is still pending). It is not a security sandbox against the same OS
+account/root inspecting process environments.
+
+Programs may use any Unix-socket client with this version-1 protocol, terminated
+by a literal newline (substitute the environment token; JSON-escape text):
+
+```json
+{"version":1,"token":"<PI_PROCESS_TOKEN>","type":"status","text":"Compiling"}
+```
+
+The response is `{"ok":true}` or `{"ok":false,"error":"rate_limited"}` (other error
+codes include `unauthorized`, `private_process`, `queue_full`, `text_too_large`,
+`frame_too_large` and `invalid_message`). Only `status`/`notify` are accepted;
+clients cannot supply another process ID. All resources/capabilities are removed
+on reload/shutdown, and late callbacks cannot enqueue new agent messages.
+
+Non-TTY stdin remains closed. `pty_write` controls only unattached public TTYs;
+while the user is attached, only their keyboard controls that session.
+
+### Interactive Pi subagents
+
+Use `/subagent <task>` (a minimal prompt alias for the `subagent` skill), or
+`/skill:subagent <task>`. The installer includes both resources.
+
+Subagents are **normal Pi TUIs in managed interactive PTYs**, never RPC/print
+workers. The parent launches with `tty: true, yield_after: 0`, retains the ID,
+and sends later prompts with `pty_write`. `/fg ID` enters the child's normal
+session; Ctrl+Z returns to the parent. Attachment is allowed even while the
+parent agent works; only its terminal renderer/input is paused. Model input is
+rejected while the user owns the child.
+
+The skill invokes its small `launch.mjs` helper. Defaults are Luna, low thinking,
+read/bash, and no discovered extensions/skills/context files/MCP. `--model`,
+`--thinking` and `--tools` can override those defaults. Every child starts fresh,
+with its own persisted session directory and UUID, not the parent's transcript.
+Only an explicit `report.ts` extension is loaded. Native child Bash still keeps
+inherited `pi-process` progress messages routed to the parent.
+
+The reporter marks each run as working, then exports **only the final assistant
+text after `agent_settled`**. Thinking, tool calls/results, banners, and the
+working history are never copied to the result. An immutable numbered turn
+artifact and current pointer are atomically saved **before** the completion
+notification; the child need not spend a model/tool call announcing completion.
+Aborted, failed, tool-only and length-limited runs are not reported as completed
+answers. Starting a follow-up clears the current result to `running`, preventing
+an older answer from being mistaken for the new result.
+
+Retrieve with codemode `tools.subagent_result({ id: "pty-1" })`. It returns
+`{id, turn, status, output}`; `turn` optionally selects a previous run.
+The default output limit is 8,000 characters, adjustable with `max_chars` (1–65,536).
+Truncated responses include `next_offset` and `result_file`; pass `offset` to read
+another page without repeating the prefix (offsets are UTF-16 indices).
+The artifact reader is deterministic and bounded: **no extra LLM extraction call**.
+The tool is codemode-only so its full schemas do not inflate the normal tool list.
+Use snapshots only for steering/terminal diagnostics, never to collect final answers.
+Task prompts request a concise handoff of at most 200 words; keep detailed work in
+artifacts and consult it selectively.
+
+Workspaces live under `${PI_CODING_AGENT_DIR:-~/.pi/agent}/process-data/<random UUID>/`.
+Workspace/session directories are mode 0700 and exported JSON records mode 0600;
+full JSONL sessions stay on disk, outside the parent's model context. **Unlike
+managed terminal logs, these saved sessions/results survive reload and child exit**
+until manually deleted. They may contain sensitive task history. The launcher
+refuses private `!!` jobs, and the result API rejects private jobs before disk access.
+The process-ID lookup lasts only as long as the managed record is retained; after
+reload/eviction, inspect or resume saved sessions by their filesystem paths.
+
+Read-only task instructions are not a security sandbox; explicitly scope
+permissions. Do not paste over a user draft or blindly retry input. Useful
+children stay open for further work rather than exiting after the first answer.
 
 ## Transcript selection into the prompt
 

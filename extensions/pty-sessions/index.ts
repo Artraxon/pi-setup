@@ -4,15 +4,24 @@ import { Type } from '@earendil-works/pi-ai';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { Sessions, screenLines } from './sessions.mjs';
+import { Sessions, screenLines } from './sessions.ts';
 import { ForegroundInput, interruptForeground } from './input.mjs';
+import { registerManagedBash } from './bash.ts';
+import { installProcessSettings } from './settings.ts';
+import { registerProcessReports } from './reports.ts';
+import { registerSubagentResult } from './subagent-result.ts';
+import { ProcessNotifications } from './notifications.ts';
 
 function label(value: string): string {
     return stripTerminalSequences(value).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
 }
 
 export default function ptySessions(pi: ExtensionAPI) {
+    registerProcessReports(pi);
     let host: any;
+    let removeSettings: (() => void) | undefined;
+    let releaseLiveness: (() => void) | undefined;
+    const exitCleanup = () => { try { sessions.dispose(); } catch {} };
     let shuttingDown = false;
     let context: ExtensionContext | undefined;
     let attached: string | undefined;
@@ -29,7 +38,24 @@ export default function ptySessions(pi: ExtensionAPI) {
             repaint = undefined;
             if (!attached) host?.requestRender();
         }, 80);
+    }, session => {
+        if (shuttingDown || session.privateOutput || !session.notifyOnExit || session.exitNotified) return;
+        session.exitNotified = true;
+        const status = session.signal ? `signal ${session.signal}` : `exit ${session.exitCode}`;
+        try {
+            pi.sendMessage({ customType: 'process-exit',
+                content: `Background process ${session.id} finished (${status}${session.timedOut ? '; hard timeout' : ''}). Use pty_snapshot with this ID to inspect output if relevant. This is a lifecycle notification, not a request to restart the command.`,
+                display: true, details: { id: session.id, exitCode: session.exitCode, signal: session.signal, timedOut: !!session.timedOut } },
+                { triggerTurn: true, deliverAs: 'followUp' });
+        } catch (error) { context?.ui.notify(`Process completion notification failed: ${label(String(error))}`, 'warning'); }
+    }, messages => shuttingDown ? false : notifications.dispatch(messages));
+    if (typeof sessions.channel?.scheduleFlush !== 'function' || typeof sessions.channel?.acknowledge !== 'function' || typeof sessions.write !== 'function') {
+        throw new Error('Managed-process backend version mismatch. Restart Pi to load matching extension files.');
+    }
+    const notifications = new ProcessNotifications(pi, sessions.channel, () => context, () => {
+        try { context?.ui.notify('Process notification delivery failed; queued for a later retry.', 'warning'); } catch {}
     });
+    registerSubagentResult(pi, sessions);
 
     function shellConfig(cwd: string): { shellPath: string; shellCommandPrefix: string } {
         const result = { shellPath: '/bin/bash', shellCommandPrefix: '' };
@@ -48,10 +74,39 @@ export default function ptySessions(pi: ExtensionAPI) {
         const session = sessions.sessions.get(id);
         if (!session) { ctx.ui.notify(`Unknown PTY: ${id}`, 'warning'); return; }
         if (!host || attached) return;
-        if (!ctx.isIdle()) { ctx.ui.notify('Wait for the agent to finish before attaching.', 'warning'); return; }
+        // Only terminal focus changes: the parent may keep working while its
+        // renderer/input loop is stopped. pty_write blocks input to attached jobs.
         recent = id;
         sessions.sessions.delete(id);
         sessions.sessions.set(id, session);
+        if (!session.tty) {
+            session.attached = true;
+            try {
+                await ctx.ui.custom<void>((tui, theme, _keys, done) => {
+                    let offset = 0;
+                    return {
+                        render(width) {
+                            const lines = screenLines(session, true);
+                            while (lines.length > 1 && !stripTerminalSequences(lines[lines.length - 1]).trim()) lines.pop();
+                            const count = Math.max(1, tui.terminal.rows - 4);
+                            offset = Math.min(offset, Math.max(0, lines.length - count));
+                            const end = lines.length - offset;
+                            const status = session.running ? 'running' : session.signal ? `signal ${session.signal}` : `exit ${session.exitCode}`;
+                            return [truncateToWidth(theme.fg('muted', `${id} · ${status}${session.statusText ? ` · ${label(session.statusText)}` : ''} · no TTY / read-only · ↑/↓ scroll · Ctrl+C interrupts · Esc closes`), width),
+                                ...lines.slice(Math.max(0, end - count), end).map(line => truncateToWidth(line, width))];
+                        },
+                        handleInput(data) {
+                            if (matchesKey(data, 'escape') || matchesKey(data, 'enter') || matchesKey(data, 'ctrl+z')) done();
+                            else if (matchesKey(data, 'ctrl+c')) sessions.stop(id, 'SIGINT', false);
+                            else if (matchesKey(data, 'up') || matchesKey(data, 'pageUp')) { offset += matchesKey(data, 'pageUp') ? 10 : 1; tui.requestRender(); }
+                            else if (matchesKey(data, 'down') || matchesKey(data, 'pageDown')) { offset = Math.max(0, offset - (matchesKey(data, 'pageDown') ? 10 : 1)); tui.requestRender(); }
+                        },
+                        invalidate() {},
+                    };
+                });
+            } finally { session.attached = false; }
+            return;
+        }
         if (!session.running) {
             const snapshot = await sessions.snapshot(id, false);
             await ctx.ui.custom<void>((tui, theme, _keys, done) => ({
@@ -126,6 +181,12 @@ export default function ptySessions(pi: ExtensionAPI) {
         }
     }
 
+    registerManagedBash(pi, sessions, shellConfig, (session, ctx) => {
+        if (ctx.mode !== 'tui') return;
+        pi.sendMessage({ customType: 'pty-preview', content: `Managed process ${session.id} continues in background.`,
+            display: true, details: { id: session.id } }, { deliverAs: 'nextTurn' });
+    }, session => { recent = session.id; });
+
     pi.registerMessageRenderer('pty-preview', (message, options, theme) => {
         const id = (message.details as { id: string }).id;
         const content = {
@@ -133,17 +194,20 @@ export default function ptySessions(pi: ExtensionAPI) {
                 const session = sessions.sessions.get(id);
                 if (!session) return [theme.fg('muted', `${id} · PTY unavailable after restart/reload`)];
                 const status = session.running ? 'running' : session.signal ? `signal ${session.signal}` : `exit ${session.exitCode}`;
-                const header = `${id} · ${status}${session.privateOutput ? ' · private !!' : ''} · ${label(session.command)}`;
-                const lines = screenLines(session, options.expanded);
-                let end = lines.length;
+                const header = `${id} · ${status} · ${session.tty ? 'TTY' : 'no TTY'}${session.privateOutput ? ' · private !!' : ''}${session.statusText ? ` · ${label(session.statusText)}` : ''} · ${label(session.command)}`;
                 const buffer = session.terminal.buffer.active;
+                // A full-screen child's first rows are usually a logo/help header,
+                // not useful progress. Keep collapsed previews metadata-only, also
+                // after detaching; expanded previews and snapshots stay complete.
+                const hideScreen = !options.expanded && buffer.type === 'alternate';
+                const lines = hideScreen ? [] : screenLines(session, options.expanded);
+                let end = lines.length;
                 const start = options.expanded ? 0 : buffer.baseY;
                 while (end > 1 && !buffer.getLine(start + end - 1)?.translateToString(true)) end--;
-                const visible = options.expanded ? lines.slice(0, end) :
-                    buffer.type === 'alternate' ? lines.slice(0, 8) : lines.slice(Math.max(0, end - 8), end);
+                const visible = options.expanded ? lines.slice(0, end) : lines.slice(Math.max(0, end - 8), end);
                 return [truncateToWidth(theme.fg('muted', header), width),
                     ...visible.map(line => truncateToWidth(line, width)),
-                    truncateToWidth(theme.fg('muted', `Ctrl+O ${options.expanded ? 'collapses' : 'expands'} · Ctrl+click to attach · /fg · /pty-list`), width)];
+                    truncateToWidth(theme.fg('muted', `Ctrl+O ${options.expanded ? 'collapses' : 'expands'} · Ctrl+click to ${session.tty ? 'attach' : 'view'} · /fg · /pty-list`), width)];
             },
             invalidate() {},
         };
@@ -156,16 +220,34 @@ export default function ptySessions(pi: ExtensionAPI) {
 
     pi.on('session_start', (_event, ctx) => {
         shuttingDown = false;
+        notifications.reset();
         context = ctx;
+        process.removeListener('exit', exitCleanup);
+        process.once('exit', exitCleanup);
+        releaseLiveness?.();
+        releaseLiveness = undefined;
+        const liveness = (globalThis as any)[Symbol.for('@agegr/pi-web/session-liveness/v1')];
+        if (liveness?.version === 1 && ctx.sessionManager?.getSessionId) {
+            releaseLiveness = liveness.register({ name: 'managed-processes', sessionId: ctx.sessionManager.getSessionId(),
+                sessionFile: ctx.sessionManager.getSessionFile?.(), isActive: () => [...sessions.sessions.values()].some(s => s.running) });
+        }
         if (ctx.mode !== 'tui') return;
         // Invisible factory obtains the host TUI for stop/start and repaints.
-        ctx.ui.setWidget('pty-host', tui => {
+        ctx.ui.setWidget('pty-host', (tui, theme) => {
+            removeSettings?.();
             host = tui;
+            removeSettings = installProcessSettings(tui, theme, ctx);
             return { render: () => [], invalidate() {} };
         });
     });
     pi.on('session_shutdown', () => {
         shuttingDown = true;
+        notifications.close();
+        removeSettings?.();
+        removeSettings = undefined;
+        releaseLiveness?.();
+        releaseLiveness = undefined;
+        process.removeListener('exit', exitCleanup);
         finishAttach?.();
         if (repaint) clearTimeout(repaint);
         sessions.dispose();
@@ -179,7 +261,8 @@ export default function ptySessions(pi: ExtensionAPI) {
         const config = shellConfig(event.cwd);
         const session = sessions.start(event.command, event.cwd, event.excludeFromContext,
             Math.max(20, host?.terminal.columns || 100), Math.max(5, host?.terminal.rows || 24),
-            config.shellPath, config.shellCommandPrefix);
+            config.shellPath, config.shellCommandPrefix, { tty: true, source: 'user', background: true });
+        session.notifyOnExit = !event.excludeFromContext;
         recent = session.id;
         pi.sendMessage({ customType: 'pty-preview', content: `PTY session ${session.id} started${event.excludeFromContext ? ' (private)' : ''}.`,
             display: true, details: { id: session.id } });
@@ -188,7 +271,7 @@ export default function ptySessions(pi: ExtensionAPI) {
     });
 
     pi.registerCommand('fg', {
-        description: 'Attach to a PTY: /fg [id], default most recently used running session',
+        description: 'Attach to a TTY or view a pipe process: /fg [id], default most recently used running session',
         handler: async (args, ctx) => {
             const id = args.trim() || (recent && sessions.sessions.get(recent)?.running ? recent :
                 [...sessions.sessions.values()].reverse().find(s => s.running)?.id);
@@ -197,7 +280,7 @@ export default function ptySessions(pi: ExtensionAPI) {
         },
     });
     pi.registerCommand('pty-list', {
-        description: 'Choose a PTY with arrows or Ctrl+J/Ctrl+K; Enter attaches',
+        description: 'Choose a managed process with arrows or Ctrl+J/Ctrl+K; Enter attaches to TTYs or views pipe output',
         handler: async (_args, ctx) => {
             const entries = sessions.list(false);
             if (!entries.length) { ctx.ui.notify('No PTY sessions yet.', 'info'); return; }
@@ -207,12 +290,12 @@ export default function ptySessions(pi: ExtensionAPI) {
                     render(width) {
                         const count = Math.max(1, Math.min(8, tui.terminal.rows - 6));
                         const start = Math.max(0, Math.min(index - count + 1, entries.length - count));
-                        return [theme.fg('muted', 'PTYs · ↑/↓ or Ctrl+K/J · Enter selects · Esc closes'),
+                        return [theme.fg('muted', 'Processes · ↑/↓ or Ctrl+K/J · Enter selects · Esc closes'),
                             ...entries.slice(start, start + count).map((entry, offset) => {
                                 const session = sessions.sessions.get(entry.id);
                                 const status = session?.running ? 'running' : session?.signal ? `signal ${session.signal}` : `exit ${session?.exitCode}`;
                                 return truncateToWidth(theme.fg(start + offset === index ? 'accent' : 'muted',
-                                    `${start + offset === index ? '›' : ' '} ${entry.id} · ${status}${entry.private ? ' · private' : ''} · ${label(entry.command)}`), width);
+                                    `${start + offset === index ? '›' : ' '} ${entry.id} · ${status} · ${entry.tty ? 'TTY' : 'pipe'}${entry.private ? ' · private' : ''}${session?.statusText ? ` · ${label(session.statusText)}` : ''} · ${label(entry.command)}`), width);
                             })];
                     },
                     handleInput(data) {
@@ -228,8 +311,41 @@ export default function ptySessions(pi: ExtensionAPI) {
         },
     });
 
+    pi.registerCommand('pty-stop', {
+        description: 'Stop a managed process: /pty-stop id [SIGTERM|SIGINT|SIGKILL]',
+        handler: async (args, ctx) => {
+            const [id, signal = 'SIGTERM', extra] = args.trim().split(/\s+/);
+            if (!id || extra || !['SIGTERM', 'SIGINT', 'SIGKILL'].includes(signal)) {
+                ctx.ui.notify('Usage: /pty-stop id [SIGTERM|SIGINT|SIGKILL]', 'warning'); return;
+            }
+            try { sessions.stop(id, signal, false); ctx.ui.notify(`Sent ${signal} to ${id}.`, 'info'); }
+            catch (error) { ctx.ui.notify(label(String(error)), 'warning'); }
+        },
+    });
     pi.registerTool({
-        name: 'pty_list', label: 'PTY sessions', description: 'List user-started PTY sessions. Private !! command text and output are not exposed.',
+        name: 'pty_write', label: 'PTY input',
+        description: 'Send UTF-8 input to a public interactive TTY. data is raw terminal input; submit appends Enter. Private, exited, non-TTY and user-attached sessions are denied.',
+        parameters: Type.Object({ id: Type.String(), data: Type.String({ maxLength: 16384 }), submit: Type.Optional(Type.Boolean()) }),
+        annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+        async execute(_id, args) {
+            sessions.write(args.id, args.data, args.submit ?? false);
+            return { content: [{ type: 'text', text: `Sent input to ${args.id}.` }], details: { id: args.id } };
+        },
+    });
+    pi.registerTool({
+        name: 'pty_stop', label: 'Stop process',
+        description: 'Signal the process group of a public managed process or TTY. Default SIGTERM; SIGINT interrupts, SIGKILL forces termination. Private !! sessions cannot be controlled by model tools.',
+        parameters: Type.Object({ id: Type.String(), signal: Type.Optional(Type.Union([Type.Literal('SIGTERM'), Type.Literal('SIGINT'), Type.Literal('SIGKILL')])) }),
+        async execute(_id, args) {
+            const signal = args.signal ?? 'SIGTERM';
+            if (!['SIGTERM', 'SIGINT', 'SIGKILL'].includes(signal)) throw new Error('Unsupported signal.');
+            sessions.stop(args.id, signal);
+            return { content: [{ type: 'text', text: `Sent ${signal} to ${args.id}.` }], details: { id: args.id, signal } };
+        },
+    });
+
+    pi.registerTool({
+        name: 'pty_list', label: 'PTY sessions', description: 'List managed bash processes and user-started TTY sessions. Includes TTY/pipe mode, running state, IDs and latest statusText. Children can report with pi-process status|notify "text". Private !! command, output and status are redacted.',
         parameters: Type.Object({}),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         async execute() {
@@ -238,7 +354,7 @@ export default function ptySessions(pi: ExtensionAPI) {
         },
     });
     pi.registerTool({
-        name: 'pty_snapshot', label: 'PTY screen', description: 'Read the current rendered screen of a public PTY, including process status and cursor position. Does not attach or send input. Private !! output is denied.',
+        name: 'pty_snapshot', label: 'PTY screen', description: 'Inspect a public managed process or TTY: status, screen, recent plain output and bounded log path. Does not attach or send input. Private !! output is denied.',
         parameters: Type.Object({ id: Type.String({ description: 'PTY id from pty_list' }) }),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         async execute(_id, args) {

@@ -20,11 +20,19 @@ install_extension clion-file-actions index.ts clion.ts inline.ts link-navigation
 rm -f "$agent_dir/extensions/clion-file-actions/shared.ts"
 install_extension compact-tools index.ts
 install_extension output-editor index.ts
+install_extension shared settings-hook.mjs
 install_extension extract index.ts editor.ts core.ts settings.ts paste.ts tool.ts
 install_extension zsh-completion index.ts bridge.py complete.zsh
 install_extension shell-colors index.ts
 python3 "$root_dir/extensions/shell-colors/install.py"
-install_extension pty-sessions index.ts sessions.mjs input.mjs package.json package-lock.json
+install_extension pty-sessions index.ts bash.ts settings.ts reports.ts notifications.ts subagent-result.ts subagent-store.ts sessions.ts input.mjs ipc.ts pi-process.mjs package.json package-lock.json
+# Remove the legacy native-ESM helpers; their imports survived /reload in Node's cache.
+rm -f "$agent_dir/extensions/pty-sessions/sessions.mjs" "$agent_dir/extensions/pty-sessions/ipc.mjs"
 npm ci --prefix "$agent_dir/extensions/pty-sessions" --no-audit --no-fund
 install_extension message-selection index.ts
 python3 "$root_dir/extensions/message-selection/install-keybindings.py"
+mkdir -p "$agent_dir/skills/subagent" "$agent_dir/prompts"
+for file in SKILL.md launch.mjs report.ts; do
+    install -m 644 "$root_dir/skills/subagent/$file" "$agent_dir/skills/subagent/$file"
+done
+install -m 644 "$root_dir/prompts/subagent.md" "$agent_dir/prompts/subagent.md"

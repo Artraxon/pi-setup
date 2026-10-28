@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { SettingsList } from '@earendil-works/pi-tui';
 import { DEFAULT_MODEL } from './core.ts';
+import { contributeSettings } from '../shared/settings-hook.mjs';
 
 function configPath(): string {
     return join(process.env.PI_CODING_AGENT_DIR || join(homedir(), '.pi/agent'), 'extract.json');
@@ -58,31 +59,18 @@ export function modelMenu(ctx: any, theme: any, current: string, done: (value?: 
     return list;
 }
 
-/** Pi 1.3 has no public settings-contribution API. Hook only its main settings
- * list (identified by stable built-in item IDs), not arbitrary extension lists.
- * No runtime files or prototypes are patched, and shutdown restores the hook.
- */
+/** Contribute to the shared Pi 1.3 main-settings hook. */
 export function installSettingsRow(host: any, theme: any, ctx: any): () => void {
-    const previous = host.setFocus;
-    if (typeof previous !== 'function') return () => {};
-    function focus(this: any, component: any, ...args: any[]) {
-        const list = component;
-        if (Array.isArray(list?.items) && list.items.some((item: any) => item.id === 'theme') &&
-            list.items.some((item: any) => item.id === 'tui-mode') && !list.items.some((item: any) => item.id === 'extract-model')) {
-            try {
-                list.items.unshift({ id: 'extract-model', label: 'Extraction model',
-                    description: 'Separate model for /extract; does not change the main conversation model',
-                    currentValue: extractionModelSpec(),
-                    submenu: (current: string, done: (value?: string) => void) => modelMenu(ctx, theme, current, done),
-                });
-                if (typeof list.applyFilter === 'function') list.applyFilter(list.searchInput?.getValue() || '');
-                else if (Array.isArray(list.filteredItems) && list.filteredItems !== list.items) list.filteredItems = [...list.items];
-            } catch (error) {
-                ctx.ui.notify(`Extraction settings: ${error instanceof Error ? error.message : String(error)}. The /settings integration may need updating for this Pi version.`, 'warning');
-            }
+    return contributeSettings(host, (list: any) => {
+        if (list.items.some((item: any) => item.id === 'extract-model')) return;
+        try {
+            list.items.unshift({ id: 'extract-model', label: 'Extraction model',
+                description: 'Separate model for /extract; does not change the main conversation model',
+                currentValue: extractionModelSpec(),
+                submenu: (current: string, done: (value?: string) => void) => modelMenu(ctx, theme, current, done),
+            });
+        } catch (error) {
+            ctx.ui.notify(`Extraction settings: ${error instanceof Error ? error.message : String(error)}.`, 'warning');
         }
-        return previous.call(this, component, ...args);
-    }
-    host.setFocus = focus;
-    return () => { if (host.setFocus === focus) host.setFocus = previous; };
+    });
 }
