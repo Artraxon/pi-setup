@@ -47,7 +47,7 @@ extensions/
   message-selection/   Ctrl+K/J transcript selection into the prompt
   output-editor/       Edit response/block text into the prompt
   pty-sessions/        Managed bash processes, background PTYs and attachment
-  shared/              Shared settings integration
+  shared/              Shared settings and reload-safe selection ownership
   shell-colors/        Native shell-output SGR preservation
   zsh-completion/      Zsh completion bridge for ! and !! input
 ```
@@ -311,6 +311,9 @@ children stay open for further work rather than exiting after the first answer.
 Ctrl+J no longer inserts a newline (**Shift+Enter** still does); Ctrl+K no longer
 deletes to end of line. Dialog/list controls retain their own bindings. PTY
 previews are not included in this text navigator; use `/fg` or PTY snapshots.
+Selection ownership uses proxy-safe identity tokens shared with CLion link
+navigation. Shutdown releases the underlying TUI callback and deactivates retained
+input/cancel handlers, preventing stale extension-context access after reload.
 
 ## Inline CLion links
 
@@ -441,7 +444,9 @@ secret-storage mechanism. Never send private PTY output or credentials.
 
 ## Output editing and compact tool summaries
 
-- **Alt+G:** open the latest assistant response in the external editor.
+- **Alt+G:** open the latest **completed** assistant response in the external
+  editor, including while the agent is working. Streaming, interrupted,
+  truncated, and tool-call-only/preamble messages are skipped.
 - **Ctrl+Alt+G:** arm a one-shot picker; click a user/assistant message or completed
   tool block. A compact tool summary opens the full tool text output, not the
   summary. Escape cancels; scrolling is supported.
@@ -449,13 +454,19 @@ secret-storage mechanism. Never send private PTY output or credentials.
 Saving and exiting replaces the prompt with the file contents. History is
 unchanged and nothing is submitted automatically. As with Ctrl+G, a normal editor
 exit imports the file even if unchanged; use **`:cq`** in Vim to cancel. The editor
-uses `VISUAL`, then `EDITOR`, then `vim`. Finish any active agent turn before
-opening it. Images are not converted to text.
+uses `VISUAL`, then `EDITOR`, then `vim`. Opening it pauses only terminal rendering
+and input; the agent continues working and its updated transcript is redrawn on
+return. Images are not converted to text.
 
 Collapsed tool calls use one summary line with a theme-colored success tick,
-error cross, or muted pending indicator. Muted `↑~N ↓~N` values estimate text tokens
-for arguments/output (characters divided by four); they are **not billed model
-usage**. Ctrl+O or clicking expands the original tool rendering where available.
+error cross, or muted pending indicator. Muted `↑  N ↓  N` values estimate text
+tokens for arguments/output (characters divided by four); they are **not billed
+model usage**. Each number is right-aligned in three characters, keeping tool
+names vertically aligned, without tildes or a separator dot. Labels use compact
+units such as `679`, `2k`, `23k`, or `.8M` (800,000). Unit values are whole numbers
+unless below one, where a single decimal omits the leading zero.
+Pending output uses a dash in the same fixed-width column. Ctrl+O or clicking
+expands the original tool rendering where available.
 
 ## Zsh completion
 

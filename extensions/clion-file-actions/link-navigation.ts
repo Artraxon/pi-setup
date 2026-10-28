@@ -1,17 +1,20 @@
 import { isKeyRelease, matchesKey } from '@earendil-works/pi-tui';
 import { extractFileReferences, type FileReference } from './clion.ts';
 
-const ownerKey = Symbol.for('pi.transcript-selection.cancel');
+import { cancelSelection, claimSelection, releaseSelection } from '../shared/selection-owner.mjs';
 // Only real rendered OSC 8 links are navigated. Ordinary web URLs are excluded.
 const links = /\x1b\]8;[^;\x07]*;([^\x07\x1b]+)(?:\x07|\x1b\\)([\s\S]*?)\x1b\]8;;(?:\x07|\x1b\\)/g;
 type Target = { component: any; url: string; reference: FileReference; y: number };
 
 export function installLinkNavigation(host: any, theme: any, ctx: any, open: (reference: FileReference) => void): () => void {
+    const owner = {};
+    let active = true;
     let selected: Target | undefined;
     let restore: (() => void) | undefined;
     function clear() {
+        if (!active) return;
         restore?.(); restore = undefined; selected = undefined;
-        if (host[ownerKey] === clear) delete host[ownerKey];
+        releaseSelection(host, owner);
         ctx.ui.setStatus('clion-link-selection', undefined);
         host.requestRender();
     }
@@ -49,7 +52,7 @@ export function installLinkNavigation(host: any, theme: any, ctx: any, open: (re
     }
     function move(direction: number) {
         const previous = selected;
-        host[ownerKey]?.();
+        cancelSelection(host);
         clear();
         const targets = collect();
         if (!targets.length) { ctx.ui.notify('No rendered project-file links found.', 'info'); return; }
@@ -70,7 +73,7 @@ export function installLinkNavigation(host: any, theme: any, ctx: any, open: (re
             }));
         };
         restore = () => { target.component.render = original; };
-        host[ownerKey] = clear;
+        claimSelection(host, owner, clear);
         ctx.ui.setStatus('clion-link-selection', `CLion: ${target.reference.label} · Alt+K/J moves · Enter opens · Esc cancels`);
         const scroll = host.getPrimaryScrollView?.();
         let viewport: any;
@@ -86,7 +89,7 @@ export function installLinkNavigation(host: any, theme: any, ctx: any, open: (re
         host.requestRender();
     }
     const removeInput = ctx.ui.onTerminalInput((data: string) => {
-        if (isKeyRelease(data)) return;
+        if (!active || isKeyRelease(data)) return;
         const focus = host.getFocusedComponent?.();
         if (!focus || typeof focus.getText !== 'function' || typeof focus.setText !== 'function' || host.hasOverlay?.()) return;
         if (matchesKey(data, 'alt+k') || matchesKey(data, 'alt+j')) {
@@ -102,5 +105,9 @@ export function installLinkNavigation(host: any, theme: any, ctx: any, open: (re
         if (matchesKey(data, 'escape')) { clear(); return { consume: true }; }
         clear();
     });
-    return () => { clear(); removeInput(); };
+    return () => {
+        if (!active) return;
+        try { clear(); }
+        finally { active = false; removeInput(); }
+    };
 }

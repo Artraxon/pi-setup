@@ -20,7 +20,7 @@ install_extension clion-file-actions index.ts clion.ts inline.ts link-navigation
 rm -f "$agent_dir/extensions/clion-file-actions/shared.ts"
 install_extension compact-tools index.ts
 install_extension output-editor index.ts
-install_extension shared settings-hook.mjs
+install_extension shared settings-hook.mjs selection-owner.mjs
 install_extension extract index.ts editor.ts core.ts settings.ts paste.ts tool.ts
 install_extension zsh-completion index.ts bridge.py complete.zsh
 install_extension shell-colors index.ts

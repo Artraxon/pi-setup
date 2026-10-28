@@ -10,6 +10,7 @@ const executable = realpathSync(execFileSync('which', ['pi'], { encoding: 'utf8'
 const require = createRequire(executable);
 const { createJiti } = require('jiti');
 const root = resolve(dirname(executable), '../..');
+const { createInteractiveTuiReference } = await import(resolve(root, 'dist/modes/interactive/tui-renderer.js'));
 const jiti = createJiti(import.meta.url, { alias: {
     '@earendil-works/pi-tui': resolve(root, 'node_modules/@earendil-works/pi-tui/dist/index.js'),
 } });
@@ -24,17 +25,25 @@ function setup(t) {
     const component = { lastMessage: { role: 'assistant' }, render: original };
     const scroll = { scrollBy(delta) { this.delta = delta; } };
     let listener, status, focus = { getText() {}, setText() {} };
-    const host = { getFocusedComponent: () => focus, hasOverlay: () => false, requestRender() {},
+    const target = { getFocusedComponent: () => focus, hasOverlay: () => false, requestRender() {},
         getPrimaryScrollView: () => scroll,
         currentLayout: { root: { component: {}, scrollView: scroll, rect: { y: 0, height: 2, width: 80 },
             children: [{ component, rect: { y: -4, width: 80, height: 3 }, children: [] }] } } };
+    const host = createInteractiveTuiReference(() => target);
     const opened = [];
-    const cleanup = installLinkNavigation(host, {}, { cwd, ui: {
+    let stale = false;
+    const ui = {
         onTerminalInput(fn) { listener = fn; return () => { listener = undefined; }; },
         setStatus(_key, value) { status = value; }, notify() {},
-    } }, ref => opened.push(ref));
+    };
+    const ctx = { cwd, get ui() {
+        if (stale) throw new Error('This extension ctx is stale after session replacement or reload.');
+        return ui;
+    } };
+    const cleanup = installLinkNavigation(host, {}, ctx, ref => opened.push(ref));
     t.after(cleanup);
-    return { host, component, original, scroll, opened, input: data => listener(data),
+    return { host, component, original, scroll, opened, input: data => listener(data), cleanup,
+        listener: () => listener, invalidate: () => { stale = true; },
         status: () => status, focus: value => focus = value };
 }
 
@@ -52,6 +61,19 @@ test('Alt+K/J navigate file links, ignore web links, preserve URLs and open only
     assert.deepEqual(s.input('\r'), { consume: true });
     assert.equal(s.opened[0].file, 'b.ts');
     assert.equal(s.component.render, s.original);
+});
+
+test('link selection releases its TUI-proxy owner and ignores callbacks after shutdown', t => {
+    const s = setup(t), key = Symbol.for('pi.transcript-selection.cancel');
+    s.input('\x1bk');
+    const lateCancel = s.host[key], lateInput = s.listener();
+    s.cleanup();
+    assert.equal(s.host[key], undefined);
+    assert.equal(s.component.render, s.original);
+    s.invalidate();
+    assert.doesNotThrow(() => lateCancel());
+    assert.equal(lateInput('\x1bk'), undefined);
+    assert.doesNotThrow(() => s.cleanup());
 });
 
 test('Escape preserves prompt; ownership handoff clears the other selection mode', t => {

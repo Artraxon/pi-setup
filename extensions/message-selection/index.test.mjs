@@ -9,6 +9,7 @@ const executable = realpathSync(execFileSync('which', ['pi'], { encoding: 'utf8'
 const require = createRequire(executable);
 const { createJiti } = require('jiti');
 const root = resolve(dirname(executable), '../..');
+const { createInteractiveTuiReference } = await import(resolve(root, 'dist/modes/interactive/tui-renderer.js'));
 const jiti = createJiti(import.meta.url, { alias: {
     '@earendil-works/pi-tui': resolve(root, 'node_modules/@earendil-works/pi-tui/dist/index.js'),
 } });
@@ -18,25 +19,32 @@ class UserMessageComponent { text = 'user message'; render() { return [`\x1b[48;
 const assistant = () => ({ lastMessage: { role: 'assistant', content: [{ type: 'text', text: '**whole response**' }] }, render: () => ['response'] });
 const tool = () => ({ toolCallId: 'call', toolName: 'bash', result: { content: [{ type: 'text', text: 'first\nsecond\nthird' }] }, render: () => ['collapsed summary'] });
 
-function setup() {
+function setup(previous) {
     const events = new Map(), shortcuts = [];
     let input, prompt = 'draft', focus = { getText() {}, setText() {} }, overlay = false;
-    const blocks = [new UserMessageComponent(), assistant(), tool()];
-    const original = blocks.map(block => block.render);
+    const blocks = previous?.blocks ?? [new UserMessageComponent(), assistant(), tool()];
+    const original = previous?.original ?? blocks.map(block => block.render);
     const content = { mouseLayout: { width: 80, children: blocks.map(component => ({ component, height: 1 })) } };
-    const scroll = { scrollBy(delta) { this.delta = delta; } };
-    const host = { requestRender() {}, getFocusedComponent: () => focus, hasOverlay: () => overlay,
+    const scroll = previous?.scroll ?? { scrollBy(delta) { this.delta = delta; } };
+    const target = { requestRender() {}, getFocusedComponent: () => focus, hasOverlay: () => overlay,
         getPrimaryScrollView: () => scroll,
         currentLayout: { root: { rect: { x: 0, y: 0, width: 80, height: 2 }, scrollView: scroll,
             component: {}, children: [{ rect: { x: 0, y: -2, width: 80, height: 3 }, component: content, children: [] }] } } };
-    const ctx = { mode: 'tui', ui: {
+    const host = previous?.host ?? createInteractiveTuiReference(() => target);
+    let stale = false;
+    const ui = {
         setWidget(_key, factory) { factory(host, { fg: (_token, value) => value, bg: (_token, value) => `selected:${value}`, getBgAnsi: () => '\x1b[44m' }); },
-        onTerminalInput(handler) { input = handler; return () => {}; },
+        onTerminalInput(handler) { input = handler; return () => { if (input === handler) input = undefined; }; },
         setStatus() {}, setEditorText(value) { prompt = value; },
+    };
+    const ctx = { mode: 'tui', get ui() {
+        if (stale) throw new Error('This extension ctx is stale after session replacement or reload.');
+        return ui;
     } };
     extension.default({ on(name, fn) { events.set(name, fn); }, registerShortcut(key) { shortcuts.push(key); } });
     events.get('session_start')({}, ctx);
-    return { input: data => input(data), blocks, original, scroll, shortcuts,
+    return { input: data => input?.(data), listener: () => input, host, blocks, original, scroll, shortcuts,
+        invalidate: () => { stale = true; },
         prompt: () => prompt, focus: value => focus = value, overlay: value => overlay = value,
         close: () => events.get('session_shutdown')({}, ctx) };
 }
@@ -83,6 +91,38 @@ test('Escape preserves draft, ordinary typing exits selection, dialogs retain ke
         s.focus({ render() {} }); assert.equal(s.input('\x0b'), undefined);
         s.focus({ getText() {}, setText() {} }); s.overlay(true);
         assert.equal(s.input('\x0a'), undefined);
+    } finally { s.close(); }
+});
+
+test('reload releases the real TUI-proxy owner and makes retained callbacks/input harmless', () => {
+    const ownerKey = Symbol.for('pi.transcript-selection.cancel');
+    const old = setup();
+    old.input('\x0b');
+    const lateCancel = old.host[ownerKey], lateInput = old.listener();
+    old.close();
+    assert.equal(old.blocks[2].render, old.original[2]);
+    old.invalidate();
+    assert.doesNotThrow(() => lateCancel());
+    assert.equal(old.host[ownerKey], undefined, 'clear the underlying TUI, not the empty proxy target');
+    assert.equal(lateInput('\x0b'), undefined);
+    const current = setup(old);
+    try {
+        assert.deepEqual(current.input('\x0b'), { consume: true });
+        current.input('\r');
+        assert.equal(current.prompt(), 'first\nsecond\nthird');
+    } finally { current.close(); current.invalidate(); }
+    assert.doesNotThrow(() => current.close(), 'shutdown is idempotent even after context invalidation');
+});
+
+test('Ctrl+K recovers a stale legacy owner left by an older extension version', () => {
+    const s = setup();
+    try {
+        s.host[Symbol.for('pi.transcript-selection.cancel')] = () => {
+            throw new Error('This extension ctx is stale after session replacement or reload.');
+        };
+        assert.deepEqual(s.input('\x0b'), { consume: true });
+        s.input('\r');
+        assert.equal(s.prompt(), 'first\nsecond\nthird');
     } finally { s.close(); }
 });
 

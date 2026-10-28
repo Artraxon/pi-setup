@@ -10,6 +10,16 @@ function textContent(content: string | Block[]): string {
 	return typeof content === "string" ? content : content.filter(block => block.type === "text").map(block => block.text ?? "").join("\n\n");
 }
 
+function latestCompleteResponse(branch: any[]): string | undefined {
+	for (let index = branch.length - 1; index >= 0; index--) {
+		const entry = branch[index];
+		if (entry.type !== "message" || entry.message.role !== "assistant" || entry.message.stopReason !== "stop") continue;
+		if (Array.isArray(entry.message.content) && entry.message.content.some((block: Block) => block.type === "toolCall")) continue;
+		const text = textContent(entry.message.content);
+		if (text.trim()) return text;
+	}
+}
+
 type Rect = { x: number; y: number; width: number; height: number };
 type Box = { rect: Rect; clip: Rect; component: any; children: Box[]; lineOffset?: number };
 type RawMouse = { x: number; y: number; button: number; release: boolean };
@@ -65,10 +75,6 @@ export default function outputEditor(pi: ExtensionAPI) {
 
 	async function edit(text: string, ctx: ExtensionContext) {
 		if (!host || editing) return;
-		if (!ctx.isIdle()) {
-			ctx.ui.notify("Wait for the agent to finish before opening the editor.", "warning");
-			return;
-		}
 		editing = true;
 		let directory: string | undefined;
 		const tui = host;
@@ -138,18 +144,13 @@ export default function outputEditor(pi: ExtensionAPI) {
 	pi.on("session_shutdown", () => { cleanup?.(); cleanup = undefined; host = undefined; });
 
 	pi.registerShortcut("alt+g", {
-		description: "Edit the latest assistant response into the prompt",
+		description: "Edit the latest completed assistant response into the prompt (also while busy)",
 		handler: async ctx => {
 			if (ctx.mode !== "tui") return;
 			cancel(ctx);
-			const branch = ctx.sessionManager.getBranch();
-			for (let index = branch.length - 1; index >= 0; index--) {
-				const entry = branch[index];
-				if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-				const text = textContent(entry.message.content);
-				if (text.trim()) { await edit(text, ctx); return; }
-			}
-			ctx.ui.notify("No assistant response to edit yet.", "info");
+			const text = latestCompleteResponse(ctx.sessionManager.getBranch());
+			if (text !== undefined) { await edit(text, ctx); return; }
+			ctx.ui.notify("No completed assistant response to edit yet.", "info");
 		},
 	});
 	pi.registerShortcut("ctrl+alt+g", {

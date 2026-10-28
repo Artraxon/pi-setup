@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { isKeyRelease, matchesKey, stripTerminalSequences, truncateToWidth } from '@earendil-works/pi-tui';
 
-const ownerKey = Symbol.for('pi.transcript-selection.cancel');
+import { cancelSelection as cancelCurrentSelection, claimSelection, releaseSelection } from '../shared/selection-owner.mjs';
 
 type Component = any;
 type Block = { component: Component; y: number; height: number; text: () => string; kind: string };
@@ -66,15 +66,15 @@ export default function messageSelection(pi: ExtensionAPI) {
     let restore: (() => void) | undefined;
     let removeInput: (() => void) | undefined;
 
-    function clear(ctx: ExtensionContext) {
+    const owner = {};
+    let latestContext: ExtensionContext | undefined;
+
+    function clear() {
         restore?.(); restore = undefined; selected = undefined;
-        if (host?.[ownerKey] === cancelSelection) delete host[ownerKey];
-        ctx.ui.setStatus('message-selection', undefined);
+        releaseSelection(host, owner);
+        latestContext?.ui.setStatus('message-selection', undefined);
         host?.requestRender();
     }
-
-    let latestContext: ExtensionContext;
-    function cancelSelection() { if (latestContext) clear(latestContext); }
 
     function reveal(component: Component) {
         const layout = host?.currentLayout;
@@ -102,9 +102,9 @@ export default function messageSelection(pi: ExtensionAPI) {
         if (!blocks.length) return;
         const index = blocks.findIndex(block => block.component === selected);
         const next = index < 0 ? blocks.length - 1 : Math.max(0, Math.min(blocks.length - 1, index + direction));
-        host[ownerKey]?.();
-        clear(ctx);
-        host[ownerKey] = cancelSelection;
+        cancelCurrentSelection(host);
+        clear();
+        claimSelection(host, owner, clear);
         const block = blocks[next];
         selected = block.component;
         const original = selected.render;
@@ -134,7 +134,7 @@ export default function messageSelection(pi: ExtensionAPI) {
         });
         removeInput?.();
         removeInput = ctx.ui.onTerminalInput(data => {
-            if (isKeyRelease(data)) return;
+            if (ctx !== latestContext || isKeyRelease(data)) return;
             // Do not steal dialog/list controls or keys from custom screens.
             const focus = host?.getFocusedComponent?.();
             if (!focus || typeof focus.getText !== 'function' || typeof focus.setText !== 'function' || host.hasOverlay?.()) return;
@@ -143,18 +143,25 @@ export default function messageSelection(pi: ExtensionAPI) {
                 return { consume: true };
             }
             if (!selected) return;
-            if (matchesKey(data, 'escape')) { clear(ctx); return { consume: true }; }
+            if (matchesKey(data, 'escape')) { clear(); return { consume: true }; }
             if (matchesKey(data, 'enter')) {
                 const block = host.currentLayout && collectBlocks(host.currentLayout.root).find(item => item.component === selected);
                 if (block) ctx.ui.setEditorText(block.text());
-                clear(ctx);
+                clear();
                 return { consume: true };
             }
             // Any normal editing action leaves transcript-selection mode and
             // keeps Pi's original input behavior for that keystroke.
-            clear(ctx);
+            clear();
         });
     });
-    pi.on('session_tree', (_event, ctx) => clear(ctx));
-    pi.on('session_shutdown', (_event, ctx) => { clear(ctx); removeInput?.(); removeInput = undefined; });
+    pi.on('session_tree', () => clear());
+    pi.on('session_shutdown', () => {
+        try { clear(); }
+        finally {
+            latestContext = undefined;
+            removeInput?.(); removeInput = undefined;
+            host = undefined; theme = undefined;
+        }
+    });
 }
