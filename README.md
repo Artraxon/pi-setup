@@ -39,6 +39,7 @@ test.sh
 extensions/
   clion-file-actions/   Inline CLion navigation and /clion
   compact-tools/       One-line collapsed tool summaries
+  extract/             Editor capture and extraction with a separate model
   message-selection/   Ctrl+K/J transcript selection into the prompt
   output-editor/       Edit response/block text into the prompt
   pty-sessions/        Background PTYs, live previews and attachment
@@ -133,6 +134,97 @@ starting Pi to override it (the existing variable name is retained for compatibi
 Only existing files inside Pi's working directory are eligible; directories,
 missing paths, code-fenced references, and symlinks escaping the project are
 excluded. The backend must have the project open and `ide_open_file` enabled.
+
+## Extract a large blob with a separate model
+
+Use **`/extract [optional instructions]`** to open an empty external-editor buffer,
+paste source material, save, and close. For example:
+
+```text
+/extract list the errors and their likely causes; preserve exact error messages
+/extract extract benchmark results into a Markdown table
+/extract
+```
+
+For faster large pastes, use **`/epaste [optional instructions]`** instead. It opens
+a Pi-native buffer, where large pastes appear as compact paste markers rather
+than being streamed into Vim. **Enter** extracts directly; **Ctrl+G** opens the
+captured text in your external editor first, already populated from a file.
+Save and close to extract, or use `:cq` in Vim to cancel. **Escape/Ctrl+C** in the
+paste buffer cancels. Shift+Enter inserts a newline. Both commands use the same
+selected model, isolated request, and result-to-prompt behavior. Paste markers
+are expanded to their complete original text before editing or extraction.
+
+The last `/extract` form requests a concise structured summary preserving important exact
+details. The command uses Pi's configured `externalEditor`, then `VISUAL`, then
+`EDITOR`, then `vim`. In Vim, **`:wq`** sends the saved text for extraction;
+**`:cq`** cancels. Empty input is not sent.
+
+The extraction result is placed in Pi's input prompt for review; **nothing is
+submitted to the main agent automatically**. The current conversation model is
+not changed. Only the extraction instructions and complete pasted source are
+sent to the side model, with no conversation history or tools. Source material is
+marked as untrusted data rather than instructions. The original blob is not
+added to the main conversation or session log; only usage metadata is recorded
+in an excluded-from-context custom entry. Temporary capture files are removed.
+Your editor's own backups/clipboard behavior and the provider's data retention
+are outside this extension's control.
+
+Choose the side model through **`/settings` → Extraction model**. The searchable
+picker lists authenticated models with catalog pricing and context sizes; it does
+not change the main conversation model. The choice is saved in
+`${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/extract.json` and takes effect immediately.
+There is no separate settings command. The row uses an internal Pi 1.3 UI hook
+and may need adjustment after Pi upgrades.
+
+Default model: **`openai/gpt-6.1-terra`**, using Pi's existing provider configuration
+and credentials. There is no silent fallback to the main model. Saved settings
+take precedence over the environment. Without a saved choice, set these before
+starting Pi to override:
+
+```sh
+export PI_EXTRACT_MODEL=openai/gpt-6.1-terra   # provider/model-id
+export PI_EXTRACT_MAX_TOKENS=8192             # output limit, capped by the model
+```
+
+The request uses minimal reasoning where supported. Escape cancels the request
+from the progress UI; a five-minute timeout is also applied. Cancellations and
+errors leave the prompt unchanged. Output-limit truncation is explicitly warned
+about. Source text is **not silently truncated or split**: requests beyond the
+model's context limit can fail and must be reduced/retried. Usage is shown in a
+notification and recorded as metadata, but this side request does not count as a
+normal agent tool call in Pi's conversation totals.
+
+Finish any active agent operation before invoking `/extract`. No live model calls
+are made by its test suite.
+
+### Summarize tool output from codemode
+
+The model-callable **`extract_text`** tool uses the same saved extraction model
+without any UI, editor, or prompt changes. It is exposed through codemode:
+
+```js
+const run = await tools.bash({ command: "your-command", timeout: 60 });
+const result = await tools.extract_text({
+    text: run.output,
+    instructions: "Summarize failures; preserve exact error messages and counts.",
+    max_tokens: 2048,
+});
+text({ exit_code: run.exit_code, source_truncated: run.truncated, ...result });
+```
+
+Only print the extraction result, not the raw output, to keep the latter out of
+the main model context. The tool returns `{ summary, model, truncated }`; always
+check `truncated` before treating the summary as complete. If the originating
+tool truncated its output, that missing text is not magically recovered: read
+its full-output file through codemode first if complete input is required.
+
+Each call makes a separately billed model request, and its usage is included in
+Pi's tool/session totals. Caller cancellation, runtime shutdown, and a five-minute
+timeout abort the request. Errors fail the tool rather than falling back to the
+main model. No conversation history or tools are sent to the side model. Tool
+arguments can be retained by Pi (including nested-call metadata); this is not a
+secret-storage mechanism. Never send private PTY output or credentials.
 
 ## Output editing and compact tool summaries
 
