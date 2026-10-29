@@ -4,7 +4,7 @@ import { stripTerminalSequences, Text, truncateToWidth } from '@earendil-works/p
 const singleLine = (value: string) => stripTerminalSequences(value)
     .replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim();
 
-export function registerProcessReports(pi: ExtensionAPI) {
+export function registerNotificationReports(pi: ExtensionAPI) {
     pi.registerMessageRenderer('process-message', (message, options, theme) => {
         const data = (message.details as { notifications?: unknown } | undefined)?.notifications;
         const reports = Array.isArray(data) ? data.flatMap(entry =>

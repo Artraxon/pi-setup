@@ -26,7 +26,7 @@ export function main(args = process.argv.slice(2)) {
     if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('Launch with managed bash tty:true, yield_after:0; a normal interactive TUI is required.');
     if (process.env.PI_PROCESS_PRIVATE === '1') throw new Error('Result-producing subagents require a public process; private !! jobs must not be persisted.');
     const directory = process.env.PI_PROCESS_DATA_DIR, id = process.env.PI_PROCESS_ID;
-    if (!directory || !id || !process.env.PI_PROCESS_TOKEN || !process.env.PI_PROCESS_SOCKET) {
+    if (!directory || !id || !process.env.PI_NOTIFY_SOCKET) {
         throw new Error('Managed-process result support is missing. Reload the parent Pi before launching a subagent.');
     }
     const sessionDirectory = initializeSubagent(directory, id);

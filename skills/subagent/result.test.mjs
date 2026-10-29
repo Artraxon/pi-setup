@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { jiti, until } from '../../extensions/pty-sessions/managed-fixture.mjs';
-import { ProcessChannel } from '../../extensions/pty-sessions/ipc.ts';
+import { NotificationChannel } from '../../extensions/notifications/channel.ts';
 import { finalResponse, initializeSubagent, readRecord, readResult, turnFile, writeRecord, MAX_RESULT_BYTES } from '../../extensions/pty-sessions/subagent-store.ts';
 import { childArguments, launchOptions } from './launch.mjs';
 const { default: reporter } = await jiti.import(fileURLToPath(new URL('./report.ts', import.meta.url)));
@@ -19,12 +19,14 @@ function fixture(t) {
     const previous = { ...process.env };
     process.env.PI_CODING_AGENT_DIR = directory;
     const notifications = [], statusSnapshots = [];
-    const processRecord = { id: 'pty-1', running: true, privateOutput: false };
-    const channel = new ProcessChannel({ onNotify(batch) { notifications.push(...batch); }, onStatus(record) {
-        if (record.statusText.startsWith('Result ready')) statusSnapshots.push(readResult(record.dataDirectory, record.id));
+    const processRecord = { id: 'pty-1', running: true, privateOutput: false, dataDirectory: join(directory, 'process-data', 'result-test') };
+    const channel = new NotificationChannel({ onNotify(batch) { notifications.push(...batch); }, onStatus(message) {
+        processRecord.statusText = message.text;
+        if (message.text.startsWith('Result ready')) statusSnapshots.push(readResult(processRecord.dataDirectory, processRecord.id));
     } });
-    const env = channel.environment(processRecord, process.env);
-    Object.assign(process.env, env, { PI_SUBAGENT_DIR: processRecord.dataDirectory });
+    const env = channel.create(processRecord.id).environment(process.env);
+    Object.assign(process.env, env, { PI_SUBAGENT_DIR: processRecord.dataDirectory, PI_PROCESS_SOCKET: env.PI_NOTIFY_SOCKET,
+        PI_PROCESS_ID: processRecord.id, PI_PROCESS_PRIVATE: '0' });
     const sessionDirectory = initializeSubagent(processRecord.dataDirectory, processRecord.id);
     const manager = sdk.SessionManager.create(directory, sessionDirectory);
     const handlers = new Map();

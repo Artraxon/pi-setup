@@ -1,23 +1,56 @@
 import pty from 'node-pty';
 import headless from '@xterm/headless';
 import { spawn } from 'node:child_process';
-import { closeSync, mkdtempSync, openSync, rmSync, writeSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { chmodSync, closeSync, mkdtempSync, openSync, rmSync, writeFileSync, writeSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { delimiter, join, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { StringDecoder } from 'node:string_decoder';
 import { stripVTControlCharacters } from 'node:util';
-import { ProcessChannel } from './ipc.ts';
 const { Terminal } = headless;
 const MAX_LOG_BYTES = 16 * 1024 * 1024;
 export const cleanOutput = value => stripVTControlCharacters(value).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
 
 export class Sessions {
     sessions = new Map();
+    endpoints = new Map();
     next = 1;
     directory;
-    constructor(onChange = () => {}, onExit = () => {}, onNotify = () => {}) {
-        this.onChange = onChange; this.onExit = onExit;
-        this.channel = new ProcessChannel({ onStatus: session => this.onChange(session), onNotify });
+    constructor(onChange = () => {}, onExit = () => {}, notifications) {
+        this.onChange = onChange; this.onExit = onExit; this.notifications = notifications;
+    }
+    environment(session, inherited) {
+        const env = { ...inherited };
+        // Drop old credentials and ancestor endpoints before assigning this job's metadata.
+        for (const key of ['PI_PROCESS_TOKEN', 'PI_NOTIFY_TOKEN', 'PI_PROCESS_SOCKET', 'PI_PROCESS_HELPER', 'PI_NOTIFY_SOCKET', 'PI_NOTIFY_HELPER', 'PI_NOTIFY_SOURCE']) delete env[key];
+        const agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), '.pi/agent');
+        session.dataDirectory = join(resolve(agentDir), 'process-data', randomUUID());
+        Object.assign(env, { PI_PROCESS_ID: session.id, PI_PROCESS_DATA_DIR: session.dataDirectory, PI_PROCESS_PRIVATE: session.privateOutput ? '1' : '0' });
+        if (!this.notifications) return env;
+        const endpoint = this.notifications.create(session.id, {
+            notify: !session.privateOutput,
+            onStatus: message => {
+                if (!session.running || session.disposed) return;
+                session.statusText = message.text; session.statusUpdatedAt = message.timestamp;
+                this.onChange(session);
+            },
+        });
+        this.endpoints.set(session.id, endpoint);
+        const notify = endpoint.environment(env);
+        if (!this.helperDirectory) {
+            this.helperDirectory = mkdtempSync(join(tmpdir(), 'pi-process-helper-'));
+            chmodSync(this.helperDirectory, 0o700);
+            const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
+            const helper = fileURLToPath(new URL('./pi-process.mjs', import.meta.url));
+            writeFileSync(join(this.helperDirectory, 'pi-process'), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(helper)} "$@"\n`, { mode: 0o700 });
+        }
+        Object.assign(env, notify, { PI_PROCESS_SOCKET: notify.PI_NOTIFY_SOCKET, PI_PROCESS_HELPER: join(this.helperDirectory, 'pi-process'),
+            PATH: `${this.helperDirectory}${delimiter}${notify.PATH}` });
+        return env;
+    }
+    closeEndpoint(id) {
+        this.endpoints.get(id)?.close(); this.endpoints.delete(id);
     }
     start(command, cwd, privateOutput, cols = 100, rows = 24, shell = '/bin/bash', prefix = '', options = {}) {
         if ([...this.sessions.values()].filter(s => s.running).length >= 16) throw new Error('At most 16 running processes are supported. Stop an existing session first.');
@@ -25,7 +58,6 @@ export class Sessions {
             const old = [...this.sessions.values()].find(s => !s.running && !s.attached);
             if (!old) throw new Error('No free process retention slots.');
             old.disposed = true;
-            this.channel.revoke(old);
             old.terminal.dispose();
             if (old.outputPath) rmSync(old.outputPath, { force: true });
             this.sessions.delete(old.id);
@@ -33,7 +65,7 @@ export class Sessions {
         const tty = options.tty ?? true;
         const id = `pty-${this.next++}`;
         const terminal = new Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true, convertEol: !tty });
-        const env = Object.fromEntries(Object.entries(options.env ?? process.env).filter(([, value]) => value !== undefined));
+        let env = Object.fromEntries(Object.entries(options.env ?? process.env).filter(([, value]) => value !== undefined));
         delete env.PI_WEB_PASSWORD;
         if (env.FORCE_COLOR === '1') delete env.FORCE_COLOR;
         if (env.CLICOLOR_FORCE === '1') delete env.CLICOLOR_FORCE;
@@ -90,7 +122,7 @@ export class Sessions {
         const finish = (exitCode, signal) => {
             if (!session.running || session.disposed) return;
             session.running = false; session.exitCode = exitCode; session.signal = signal;
-            this.channel.revoke(session);
+            this.closeEndpoint(session.id);
             clearTimeout(session.timeoutTimer);
             closeLog();
             void session.ready.then(() => {
@@ -100,7 +132,7 @@ export class Sessions {
         };
         const resolvedCommand = prefix ? `${prefix}\n${command}` : command;
         try {
-            Object.assign(env, this.channel.environment(session, env));
+            env = this.environment(session, env);
             if (tty) {
                 const processPty = pty.spawn(shell, ['-c', resolvedCommand], { name: 'xterm-256color', cols, rows, cwd, env: { ...env, TERM: 'xterm-256color' } });
                 session.process = processPty;
@@ -127,7 +159,7 @@ export class Sessions {
             }
         } catch (error) {
             session.disposed = true;
-            this.channel.revoke(session);
+            this.closeEndpoint(session.id);
             closeLog(); terminal.dispose();
             if (session.outputPath) rmSync(session.outputPath, { force: true });
             throw error;
@@ -182,7 +214,7 @@ export class Sessions {
             ...(s.statusText !== undefined && !(model && s.privateOutput) ? { statusText: s.statusText, statusUpdatedAt: s.statusUpdatedAt } : {}) }));
     }
     dispose() {
-        this.channel.close();
+        for (const id of this.endpoints.keys()) this.closeEndpoint(id);
         for (const session of this.sessions.values()) {
             clearTimeout(session.timeoutTimer);
             if (session.running) this.stop(session.id, 'SIGKILL', false);
@@ -193,6 +225,7 @@ export class Sessions {
         }
         this.sessions.clear();
         if (this.directory) { rmSync(this.directory, { recursive: true, force: true }); this.directory = undefined; }
+        if (this.helperDirectory) { rmSync(this.helperDirectory, { recursive: true, force: true }); this.helperDirectory = undefined; }
     }
 }
 

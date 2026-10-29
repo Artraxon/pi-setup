@@ -25,9 +25,11 @@ install_extension extract index.ts editor.ts core.ts settings.ts paste.ts tool.t
 install_extension zsh-completion index.ts bridge.py complete.zsh
 install_extension shell-colors index.ts
 python3 "$root_dir/extensions/shell-colors/install.py"
-install_extension pty-sessions index.ts bash.ts settings.ts reports.ts notifications.ts subagent-result.ts subagent-store.ts sessions.ts input.mjs ipc.ts pi-process.mjs package.json package-lock.json
+install_extension notifications index.ts service.ts channel.ts endpoint.ts delivery.ts reports.ts pi-notify.mjs
+install_extension pty-sessions index.ts bash.ts settings.ts subagent-result.ts subagent-store.ts sessions.ts input.mjs pi-process.mjs package.json package-lock.json
 # Remove the legacy native-ESM helpers; their imports survived /reload in Node's cache.
-rm -f "$agent_dir/extensions/pty-sessions/sessions.mjs" "$agent_dir/extensions/pty-sessions/ipc.mjs"
+rm -f "$agent_dir/extensions/pty-sessions/sessions.mjs" "$agent_dir/extensions/pty-sessions/ipc.mjs" \
+    "$agent_dir/extensions/pty-sessions/ipc.ts" "$agent_dir/extensions/pty-sessions/notifications.ts" "$agent_dir/extensions/pty-sessions/reports.ts"
 npm ci --prefix "$agent_dir/extensions/pty-sessions" --no-audit --no-fund
 install_extension message-selection index.ts
 python3 "$root_dir/extensions/message-selection/install-keybindings.py"

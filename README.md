@@ -45,6 +45,7 @@ extensions/
   compact-tools/       One-line collapsed tool summaries
   extract/             Editor capture and extraction with a separate model
   message-selection/   Ctrl+K/J transcript selection into the prompt
+  notifications/       Labeled local sockets, shared inbox and report renderer
   output-editor/       Edit response/block text into the prompt
   pty-sessions/        Managed bash processes, background PTYs and attachment
   shared/              Shared settings and reload-safe selection ownership
@@ -167,85 +168,128 @@ completion subprocess is not used to execute these jobs.
 
 ### Process-to-Pi messages
 
-Every managed launch (model Bash, public `!`, private `!!`, TTY or pipe) receives a
-`pi-process` helper on its `PATH`. Descendants inherit it. No D-Bus, external
-service or new npm dependency is needed:
+**Every managed launch gets a distinct socket**, labeled with its process ID
+(`pty-N`). The parent maintains the process-ID → endpoint mapping. Neither
+sender-supplied identity nor a broadcast status registry is needed: status goes
+directly to that endpoint's owning process record.
 
 ```sh
-pi-process status "Compiling: 42 / 100 files"
-pi-process notify "Ready for integration tests"
-pi-process status ""  # Clear the latest status
+pi-notify status "Compiling: 42 / 100 files"
+pi-notify notify "Ready for integration tests"
+pi-notify status ""  # Clear the latest status
 ```
 
-`status` replaces local `statusText`/`statusUpdatedAt`, repaints the process list
-and previews, and **never invokes the agent or adds conversation messages**.
-The latest status appears in explicit `pty_list`/`pty_snapshot` queries and stays
-with the record after exit until eviction. `/pty-list` updates live while open.
+`pi-process` remains a compatibility alias. Both clients need only a socket,
+message type and text. The parent assigns the label; the child never sends or
+remembers its ID for notifications. Descendants inherit their managed launch's
+endpoint. Separately managed launches—including nested ones—get new endpoints.
 
-`notify` queues an identified **untrusted process-output** message for the main
-agent with `triggerTurn: true, deliverAs: "followUp"`. It does not interrupt the
-current turn. Messages arriving within 100 ms are batched, with at most 32 KiB
-of serialized notification data per batch. Reports stay in the bounded local
-queue while the parent is busy and are dispatched once it is idle, after
-`agent_settled`. At most one batch is outstanding per run. A handoff to
-`pi.sendMessage` is **not** delivery: the exact queued prefix is removed only
-when `message_end` confirms that report entered the transcript. This avoids
-losing notifications when Escape clears Pi's volatile follow-up queue.
-Uncommitted handoffs can retry after settlement or join the next normal run;
-committed reports are not replayed. Notifications can cause model usage charges.
-Status text is not automatically included in these messages. In the transcript,
-notifications render as one width-truncated line with a themed pink `↩` icon,
-process ID and report text—no JSON panel or timestamp block. Ctrl+O explicitly
-expands the complete report text. This is display-only: the agent still receives
-the original identified, untrusted notification payload.
+`status` updates the live record's `statusText`/`statusUpdatedAt`, repaints its
+previews/list and never invokes the agent. Status survives in the record after
+exit until eviction. Process exit closes its socket and removes the mapping,
+but notifications already accepted into the shared inbox are retained.
 
-Limits and acknowledgement semantics:
-- Status: 1024 UTF-8 bytes, burst 10 updates, refilling at 10/second per process.
-- Notify: 8192 UTF-8 bytes, burst 3, refilling at 3/minute per process; global burst
-  6, refilling at 6/minute. At most 32 notifications are queued locally.
-- One newline-terminated JSON request and acknowledgement per connection, 64 KiB
-  maximum frame, 32 active connections, 3-second idle/absolute server and client
-  deadlines.
-- Success is silent and means accepted locally, **not** guaranteed LLM delivery
-  or successful handling. Shutdown discards pending messages. The helper exits
-  nonzero on rejection/unavailability, with a short error that does not echo text
-  or credentials. Use backoff or `|| :` for best-effort progress under `set -e`.
+`PI_NOTIFY_SOCKET` and `PI_NOTIFY_HELPER` select the endpoint/client.
+`PI_PROCESS_SOCKET` and `PI_PROCESS_HELPER` preserve the old helper interface.
+`PI_PROCESS_ID`, `PI_PROCESS_PRIVATE` (`0`/`1`) and `PI_PROCESS_DATA_DIR` remain
+automatic metadata for result persistence, not notification identity.
+Ordinary commands create no workspace. Nested launches replace ancestor
+endpoint/job metadata; there are no notification tokens or source-label variables.
 
-A private `!!` process may set a user-visible status, but model queries redact it
-and notifications are rejected with `private_process`. No private status is
-written to a log. Exited/disposed processes cannot send new messages.
-
-The endpoint is one filesystem Unix socket per Pi instance in a short, mode-0700
-`/tmp/pi-ipc-*` directory; the socket is mode 0600. Each launch gets an independent
-random capability token, revoked on exit. `PI_PROCESS_SOCKET`, `PI_PROCESS_TOKEN`
-and `PI_PROCESS_HELPER` identify its endpoint/credential/helper. `PI_PROCESS_ID`,
-`PI_PROCESS_PRIVATE` (`0`/`1`) and `PI_PROCESS_DATA_DIR` identify the owning job
-and its reserved, random workspace path. Ordinary commands allocate no workspace.
-Use
-`"$PI_PROCESS_HELPER" status "text"` if a shell rewrites `PATH`. Never print or
-persist the token. These variables are overwritten for nested managed launches,
-so children of another Pi instance do not accidentally use its credentials.
-This is same-host IPC, designed for Linux and macOS (Linux-tested; native macOS
-validation is still pending). It is not a security sandbox against the same OS
-account/root inspecting process environments.
-
-Programs may use any Unix-socket client with this version-1 protocol, terminated
-by a literal newline (substitute the environment token; JSON-escape text):
-
-```json
-{"version":1,"token":"<PI_PROCESS_TOKEN>","type":"status","text":"Compiling"}
-```
-
-The response is `{"ok":true}` or `{"ok":false,"error":"rate_limited"}` (other error
-codes include `unauthorized`, `private_process`, `queue_full`, `text_too_large`,
-`frame_too_large` and `invalid_message`). Only `status`/`notify` are accepted;
-clients cannot supply another process ID. All resources/capabilities are removed
-on reload/shutdown, and late callbacks cannot enqueue new agent messages.
+Private `!!` jobs have their own endpoint too. It accepts user-visible status
+but rejects notifications regardless of sender-supplied environment flags.
+Model queries still redact private status; no private output/status is logged
+or automatically sent to the model. This is not a same-user security sandbox:
+another program under the same OS account can discover and use other sockets.
 
 Non-TTY stdin remains closed. `pty_write` controls only unattached public TTYs;
 while the user is attached, only their keyboard controls that session.
 
-### Interactive Pi subagents
+## Local notification service
+
+Sockets are independent resources, not a single shared endpoint. The
+`notifications` extension provides a labeled endpoint factory plus one bounded
+inbox/delivery pipeline. Process launching is just a consumer.
+
+Inside Pi:
+
+```text
+/create-socket build-watcher       Create/show this labeled external socket
+/create-socket test-watcher        Create/show a different socket
+/list-sockets                      List active labels and socket paths
+/close-socket build-watcher
+```
+
+The command prints the requested socket and helper paths without invoking a
+model. Repeating an external label shows its current socket; the extension API
+`service.create(label)` always creates a new endpoint, even for equal labels.
+There is no arbitrary endpoint-count cap. Each endpoint can be closed separately.
+
+Give the socket path to an already-running program through its own configuration
+or control channel. It does not need to restart, register itself or know its label.
+For example (replace the socket path with the command's output):
+
+```sh
+node "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/extensions/notifications/pi-notify.mjs" \
+  --socket /tmp/pi-notify-XXXXXX/1 notify "Build finished"
+```
+
+Alternatively use the printed helper path or `PI_NOTIFY_SOCKET`. Existing Node
+programs can import `sendNotification(type, text, {socket})` from
+`pi-notify.mjs`; it uses only Node built-ins. There is no `--source` option,
+sender ID, label field, authentication token or source registration in a request.
+
+Extension consumers obtain `getNotificationService(pi)`, then call
+`service.create(label, {onStatus})`. The returned endpoint exposes `path`,
+`label`, `environment(inheritedEnv)`, `closed` and `close()`.
+Status callbacks belong to individual endpoints; closing one does not affect
+others. Managed processes retain their own ID → endpoint map and close only
+their endpoints on exit/disposal. External sockets remain independent.
+
+`notify` queues **untrusted output** with `triggerTurn: true, deliverAs: "followUp"`
+without interrupting the current turn. Reports wait locally while Pi is busy.
+Only transcript confirmation (`message_end`), not `sendMessage`, removes the
+queued prefix, preserving Escape/abort recovery. At most one batch is outstanding
+per run; notifications can cause normal model usage charges.
+
+Model-facing reports use compact `[label, text]` pairs, with no timestamps or
+repeated object keys. Full metadata stays in transcript details for the renderer.
+The child supplies neither identity nor routing prose. Reports still display as
+a width-truncated line with the themed pink `↩`, label and text; Ctrl+O expands
+the complete text. Status is never included in model messages automatically.
+
+Limits are shared across endpoints: status 1024 UTF-8 bytes, burst 100/refill
+100 per second; notify 8192 bytes, burst 6/refill 6 per minute; 32 queued reports,
+32 active connections, 64 KiB frames and 3-second server/default-client deadlines.
+Labels are assigned at creation, sanitized and limited to 128 UTF-8 bytes.
+Batching is 100 ms with at most 32 KiB serialized report data. Creating more
+sockets does not bypass global flood protection.
+
+Any Unix-socket client sends exactly a newline-terminated type/text object:
+
+```json
+{"type":"notify","text":"Build finished"}
+```
+
+The server attaches that socket's label. Identity/version/token fields are not
+accepted. Acknowledgements are `{"ok":true}` or
+`{"ok":false,"error":"rate_limited"}`; other errors include `private_process`,
+`queue_full`, `text_too_large`, `frame_too_large` and `invalid_message`.
+Success means locally accepted, not guaranteed model delivery. Client failures
+return nonzero without echoing message text; use backoff or `|| :` for
+best-effort progress under `set -e`.
+
+Sockets live in a mode-0700 `/tmp/pi-notify-*` runtime directory and are mode 0600.
+Filesystem permissions restrict other OS accounts, not the same account/root.
+Linux/macOS same-host IPC is supported; Linux is tested, native macOS validation
+remains pending.
+
+**Reload/shutdown closes all endpoints and discards pending reports, but never
+kills external programs.** Give those programs their new socket paths afterward.
+Managed jobs retain their separate kill-on-reload lifecycle. Closing just one
+endpoint does not discard reports it has already submitted.
+
+## Interactive Pi subagents
 
 Use `/subagent <task>` (a minimal prompt alias for the `subagent` skill), or
 `/skill:subagent <task>`. The installer includes both resources.

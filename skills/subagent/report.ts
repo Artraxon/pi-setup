@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { finalResponse, readRecord, readResult, turnFile, writeRecord } from '../../extensions/pty-sessions/subagent-store.ts';
-import { sendProcessMessage } from '../../extensions/pty-sessions/pi-process.mjs';
+import { sendNotification } from '../../extensions/notifications/pi-notify.mjs';
 
 // Explicitly loaded by launch.mjs, even though discovered extensions are disabled.
 // All long-lived work begins at lifecycle events, never in the factory.
@@ -10,7 +10,7 @@ export default function reportSubagent(pi: ExtensionAPI) {
     let active = true, turn = 0, startingLeaf: string | null = null, sessionId: string | undefined;
     const send = async (type: 'status' | 'notify', text: string) => {
         if (!active) return;
-        try { await sendProcessMessage(type, text); } catch { /* Results remain readable if the parent is gone/rate-limited/private. */ }
+        try { await sendNotification(type, text); } catch { /* Results remain readable if the parent is gone/rate-limited/private. */ }
     };
     pi.on('session_start', () => { active = true; });
     pi.on('session_shutdown', () => { active = false; });

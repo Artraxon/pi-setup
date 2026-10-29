@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -30,8 +31,14 @@ export function setup(t, mode = 'tui') {
     process.env.PI_CODING_AGENT_DIR = directory;
     const events = new Map(), commands = new Map(), tools = new Map(), renderers = new Map(), messages = [], notices = [];
     const state = { directory, events, commands, tools, renderers, messages, notices, autoDeliver: true };
+    const bus = new EventEmitter();
+    const eventBus = { emit: (name, data) => bus.emit(name, data), on(name, fn) { bus.on(name, fn); return () => bus.off(name, fn); } };
     extension({
-        on(name, handler) { events.set(name, handler); },
+        events: eventBus,
+        on(name, handler) {
+            const previous = events.get(name);
+            events.set(name, previous ? (...args) => { const value = previous(...args); return handler(...args) ?? value; } : handler);
+        },
         registerTool(tool) { tools.set(tool.name, tool); },
         registerCommand(name, command) { commands.set(name, command); },
         registerMessageRenderer(name, renderer) { renderers.set(name, renderer); },

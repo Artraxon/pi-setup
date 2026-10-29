@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { setup, until } from './managed-fixture.mjs';
 import { Sessions } from './sessions.ts';
 import { sendProcessMessage } from './pi-process.mjs';
+import { NotificationChannel } from '../notifications/channel.ts';
+import { sendNotification } from '../notifications/pi-notify.mjs';
 const notices = s => s.messages.filter(entry => entry.message.customType === 'process-message');
 
 test('child status is visible to model queries and a live process picker without invoking the agent', async t => {
@@ -30,7 +32,7 @@ test('a running child notification queues an identified, untrusted follow-up wit
     await until(() => notices(s).length > 0);
     const notice = notices(s)[0];
     assert.deepEqual(notice.options, { triggerTurn: true, deliverAs: 'followUp' });
-    assert.match(notice.message.content, /Untrusted managed-process/);
+    assert.match(notice.message.content, /Untrusted notifications/);
     assert.match(notice.message.content, /Ready for tests/);
     assert.ok(notice.message.content.includes(data.id));
     assert.ok(!notice.message.content.includes('Awaiting action'));
@@ -82,17 +84,44 @@ test('quick commands retain native result shape; status survives normal process 
     assert.equal(s.exits().length, 0);
 });
 
-test('real backend exit revokes the launched process capability and shutdown removes its endpoint', async t => {
-    const sessions = new Sessions(); t.after(() => sessions.dispose());
-    const session = sessions.start('trap "exit 0" TERM; while :; do sleep 30; done', process.cwd(), false, 60, 10, '/bin/bash', '', { tty: false });
-    const token = [...sessions.channel.records.keys()][0];
-    const env = { PI_PROCESS_SOCKET: sessions.channel.path, PI_PROCESS_TOKEN: token };
-    await sendProcessMessage('status', 'running', { env });
-    sessions.stop(session.id, 'SIGTERM');
-    await session.done;
-    assert.equal(session.exitCode, 0);
-    assert.equal(sessions.channel.records.size, 0);
-    await assert.rejects(sendProcessMessage('notify', 'late', { env }), /unauthorized/);
-    sessions.dispose();
-    await assert.rejects(sendProcessMessage('status', 'after shutdown', { env }), /unavailable/);
+test('managed environments replace ancestor metadata; each private endpoint enforces its own notification policy', async t => {
+    const channel = new NotificationChannel(); t.after(() => channel.close());
+    const sessions = new Sessions(undefined, undefined, channel); t.after(() => sessions.dispose());
+    const outer = { PATH: process.env.PATH, PI_PROCESS_TOKEN: 'obsolete', PI_NOTIFY_TOKEN: 'obsolete', PI_NOTIFY_SOCKET: '/ancestor/socket',
+        PI_PROCESS_SOCKET: '/ancestor/socket', PI_PROCESS_ID: 'ancestor', PI_PROCESS_PRIVATE: '1', PI_NOTIFY_SOURCE: 'ancestor' };
+    const env = sessions.environment({ id: 'pty-1', privateOutput: false }, outer);
+    const endpoint = sessions.endpoints.get('pty-1');
+    assert.equal(env.PI_PROCESS_SOCKET, endpoint.path); assert.equal(env.PI_NOTIFY_SOCKET, endpoint.path);
+    assert.equal(env.PI_PROCESS_ID, 'pty-1'); assert.equal(env.PI_PROCESS_PRIVATE, '0'); assert.equal(env.PI_NOTIFY_SOURCE, undefined);
+    assert.equal(env.PI_PROCESS_TOKEN, undefined); assert.equal(env.PI_NOTIFY_TOKEN, undefined);
+    const privateEnv = sessions.environment({ id: 'pty-2', privateOutput: true }, env);
+    assert.notEqual(privateEnv.PI_NOTIFY_SOCKET, env.PI_NOTIFY_SOCKET);
+    assert.equal(privateEnv.PI_PROCESS_ID, 'pty-2');
+    delete privateEnv.PI_PROCESS_PRIVATE; delete privateEnv.PI_PROCESS_ID;
+    await assert.rejects(sendProcessMessage('notify', 'private', { env: privateEnv }), /private_process/);
+    await assert.rejects(sendNotification('notify', 'private', { env: privateEnv }), /private_process/);
+    assert.equal(channel.queue.length, 0);
+});
+
+test('each launched process owns a separate mapped socket; identity-free status cannot update another process', async t => {
+    const messages = [], channel = new NotificationChannel({ onNotify: batch => messages.push(...batch) });
+    t.after(() => channel.close());
+    const sessions = new Sessions(undefined, undefined, channel); t.after(() => sessions.dispose());
+    const external = channel.create('existing-worker');
+    const start = () => sessions.start('trap "exit 0" TERM; while :; do sleep 30; done', process.cwd(), false, 60, 10, '/bin/bash', '', { tty: false });
+    const first = start(), second = start();
+    const a = sessions.endpoints.get(first.id), b = sessions.endpoints.get(second.id);
+    assert.equal(new Set([a.path, b.path, external.path]).size, 3);
+    await sendProcessMessage('status', 'First running', { env: { PI_PROCESS_SOCKET: a.path } });
+    await sendProcessMessage('status', 'Second running', { env: { PI_PROCESS_SOCKET: b.path, PI_PROCESS_ID: first.id } });
+    assert.equal(first.statusText, 'First running'); assert.equal(second.statusText, 'Second running');
+    sessions.stop(first.id, 'SIGTERM'); await first.done;
+    assert.equal(sessions.endpoints.has(first.id), false); assert.equal(a.closed, true); assert.equal(b.closed, false);
+    await assert.rejects(sendProcessMessage('status', 'Late', { env: { PI_PROCESS_SOCKET: a.path } }), /unavailable/);
+    await sendProcessMessage('notify', 'Second ready', { env: { PI_PROCESS_SOCKET: b.path } });
+    sessions.dispose(); assert.equal(sessions.endpoints.size, 0); assert.equal(b.closed, true);
+    await sendNotification('notify', 'External still works', { socket: external.path });
+    await until(() => messages.length === 2);
+    assert.deepEqual(messages.map(({ id, text }) => [id, text]), [[second.id, 'Second ready'], ['existing-worker', 'External still works']]);
+    channel.close(); await assert.rejects(sendNotification('notify', 'Closed', { socket: external.path }), /unavailable/);
 });

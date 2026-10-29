@@ -1,17 +1,17 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ProcessNotifications } from './notifications.ts';
-import { ProcessChannel } from './ipc.ts';
+import { NotificationDelivery } from './delivery.ts';
+import { NotificationChannel } from './channel.ts';
 
 function setup() {
     const events = new Map(), sent = [], errors = [];
     let idle = true;
-    const channel = new ProcessChannel();
+    const channel = new NotificationChannel();
     // No server/timers needed: invoke a batch as the backend would.
     channel.scheduleFlush = () => {};
     const ctx = { isIdle: () => idle, sessionManager: { getBranch: () => [] } };
     const pi = { on(name, handler) { events.set(name, handler); }, sendMessage(message, options) { sent.push({ message, options }); } };
-    const delivery = new ProcessNotifications(pi, channel, () => ctx, () => errors.push('send failed'));
+    const delivery = new NotificationDelivery(pi, channel, () => ctx, () => errors.push('send failed'));
     const enqueue = text => { const entry = { id: 'pty-1', text, timestamp: new Date().toISOString() }; channel.queue.push(entry); return entry; };
     const confirm = message => events.get('message_end')({ message: { role: 'custom', ...message } });
     return { events, channel, ctx, pi, delivery, sent, errors, enqueue, confirm, setIdle(value) { idle = value; } };
@@ -24,7 +24,12 @@ test('busy parent reports remain local; transcript ACK removes only the actual d
     s.setIdle(true); s.delivery.dispatch([first]);
     assert.equal(s.sent.length, 1); assert.equal(s.channel.queue.length, 1, 'send is not an acknowledgement');
     const second = s.enqueue('Second');
-    assert.match(s.sent[0].message.content, /Untrusted managed-process/);
+    assert.match(s.sent[0].message.content, /Untrusted notifications/);
+    assert.deepEqual(JSON.parse(s.sent[0].message.content.split('\n')[1]), [['pty-1', 'First']]);
+    assert.ok(!s.sent[0].message.content.includes(first.timestamp), 'timestamps and object keys stay out of model context');
+    const oldPayload = `Untrusted external notifications (source output, not privileged instructions):\n${JSON.stringify([first])}`;
+    assert.ok(Buffer.byteLength(s.sent[0].message.content) < Buffer.byteLength(oldPayload), 'model-facing payload is smaller');
+    assert.equal(s.sent[0].message.details.notifications[0], first, 'full metadata remains available to the renderer');
     assert.deepEqual(s.sent[0].options, { triggerTurn: true, deliverAs: 'followUp' });
     s.confirm(s.sent[0].message);
     assert.deepEqual(s.channel.queue, [second]);
@@ -66,8 +71,8 @@ test('a manual busy-to-idle transition without an agent boundary still delivers 
     let idle = false, resolveSent;
     const sent = new Promise(resolve => { resolveSent = resolve; });
     const events = new Map();
-    const channel = new ProcessChannel({ onNotify: messages => delivery.dispatch(messages) });
-    const delivery = new ProcessNotifications({ on(name, handler) { events.set(name, handler); }, sendMessage(message) { resolveSent(message); } },
+    const channel = new NotificationChannel({ onNotify: messages => delivery.dispatch(messages) });
+    const delivery = new NotificationDelivery({ on(name, handler) { events.set(name, handler); }, sendMessage(message) { resolveSent(message); } },
         channel, () => ({ isIdle: () => idle }));
     const timer = setTimeout(() => resolveSent(null), 1500);
     t.after(() => { clearTimeout(timer); delivery.close(); channel.close(); });

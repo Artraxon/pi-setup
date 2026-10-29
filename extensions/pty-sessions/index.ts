@@ -8,16 +8,15 @@ import { Sessions, screenLines } from './sessions.ts';
 import { ForegroundInput, interruptForeground } from './input.mjs';
 import { registerManagedBash } from './bash.ts';
 import { installProcessSettings } from './settings.ts';
-import { registerProcessReports } from './reports.ts';
 import { registerSubagentResult } from './subagent-result.ts';
-import { ProcessNotifications } from './notifications.ts';
+import { getNotificationService } from '../notifications/service.ts';
 
 function label(value: string): string {
     return stripTerminalSequences(value).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
 }
 
 export default function ptySessions(pi: ExtensionAPI) {
-    registerProcessReports(pi);
+    const notifications = getNotificationService(pi);
     let host: any;
     let removeSettings: (() => void) | undefined;
     let releaseLiveness: (() => void) | undefined;
@@ -48,13 +47,10 @@ export default function ptySessions(pi: ExtensionAPI) {
                 display: true, details: { id: session.id, exitCode: session.exitCode, signal: session.signal, timedOut: !!session.timedOut } },
                 { triggerTurn: true, deliverAs: 'followUp' });
         } catch (error) { context?.ui.notify(`Process completion notification failed: ${label(String(error))}`, 'warning'); }
-    }, messages => shuttingDown ? false : notifications.dispatch(messages));
-    if (typeof sessions.channel?.scheduleFlush !== 'function' || typeof sessions.channel?.acknowledge !== 'function' || typeof sessions.write !== 'function') {
+    }, notifications);
+    if (sessions.notifications !== notifications || typeof sessions.write !== 'function') {
         throw new Error('Managed-process backend version mismatch. Restart Pi to load matching extension files.');
     }
-    const notifications = new ProcessNotifications(pi, sessions.channel, () => context, () => {
-        try { context?.ui.notify('Process notification delivery failed; queued for a later retry.', 'warning'); } catch {}
-    });
     registerSubagentResult(pi, sessions);
 
     function shellConfig(cwd: string): { shellPath: string; shellCommandPrefix: string } {
@@ -220,7 +216,6 @@ export default function ptySessions(pi: ExtensionAPI) {
 
     pi.on('session_start', (_event, ctx) => {
         shuttingDown = false;
-        notifications.reset();
         context = ctx;
         process.removeListener('exit', exitCleanup);
         process.once('exit', exitCleanup);
@@ -242,7 +237,6 @@ export default function ptySessions(pi: ExtensionAPI) {
     });
     pi.on('session_shutdown', () => {
         shuttingDown = true;
-        notifications.close();
         removeSettings?.();
         removeSettings = undefined;
         releaseLiveness?.();

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createRequire } from 'node:module';
@@ -27,8 +28,10 @@ async function until(predicate) {
 test('public/private tools, picker keys, foreground detach and shutdown', async () => {
     const events = new Map(), commands = new Map(), tools = new Map(), messages = [];
     let previewRenderer;
+    const bus = new EventEmitter();
     extension.default({
-        on(name, handler) { events.set(name, handler); },
+        events: { emit: (name, data) => bus.emit(name, data), on(name, fn) { bus.on(name, fn); return () => bus.off(name, fn); } },
+        on(name, handler) { const previous = events.get(name); events.set(name, previous ? (...args) => { previous(...args); return handler(...args); } : handler); },
         registerTool(tool) { tools.set(tool.name, tool); },
         registerCommand(name, command) { commands.set(name, command); },
         registerMessageRenderer(name, renderer) { if (name === 'pty-preview') previewRenderer = renderer; },
