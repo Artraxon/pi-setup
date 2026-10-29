@@ -65,7 +65,7 @@ test('launcher refuses private result persistence before creating a workspace', 
 test('private jobs get an explicit private environment and the result API denies access before reading disk', async t => {
     const s = setup(t);
     await s.events.get('user_bash')({ command: 'pi-process status "private=${PI_PROCESS_PRIVATE}"; sleep 30', cwd: s.directory, excludeFromContext: true }, s.ctx);
-    const picker = s.commands.get('pty-list').handler('', s.ctx);
+    const picker = s.commands.get('top').handler('', s.ctx);
     await until(() => s.dialog && s.dialog.render(160).join('\n').includes('· private=1 ·'));
     const id = (await s.list()).find(record => record.private).id;
     await assert.rejects(s.tools.get('subagent_result').execute('test', { id }), /Private/);

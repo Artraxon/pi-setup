@@ -65,7 +65,7 @@ test('public/private tools, picker keys, foreground detach and shutdown', async 
         assert.equal((await list())[0].command, '[private !! session]');
         await assert.rejects(snapshot('pty-2'), /Private/);
         await until(() => messages.length === 2);
-        await commands.get('pty-list').handler('', ctx);
+        await commands.get('top').handler('', ctx);
         // Attach using the real raw-input handler but a mocked Pi TUI. Only the
         // explicit focused input goes to the PTY; Ctrl+Z detaches without SIGTSTP.
         const originalWrite = process.stdout.write;

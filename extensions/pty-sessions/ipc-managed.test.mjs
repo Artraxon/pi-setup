@@ -9,13 +9,48 @@ import { NotificationChannel } from '../notifications/channel.ts';
 import { sendNotification } from '../notifications/pi-notify.mjs';
 const notices = s => s.messages.filter(entry => entry.message.customType === 'process-message');
 
+test('/top, /stop and /kill replace the old commands while model tool names remain unchanged', async t => {
+    const s = setup(t);
+    assert.ok(s.commands.has('top')); assert.ok(s.commands.has('stop')); assert.ok(s.commands.has('kill'));
+    assert.equal(s.commands.has('pty-list'), false); assert.equal(s.commands.has('pty-stop'), false);
+    assert.ok(s.tools.has('pty_list')); assert.ok(s.tools.has('pty_stop'));
+    const data = (await s.run({ command: 'sleep 30', yield_after: 0.01 })).structuredContent;
+    await s.commands.get('kill').handler(`${data.id} INVALID`, s.ctx);
+    assert.match(s.notices.at(-1), /Usage: \/kill/);
+    assert.equal((await s.snapshot(data.id)).running, true);
+    await s.commands.get('kill').handler(data.id, s.ctx);
+    assert.match(s.notices.at(-1), /^Sent SIGKILL/);
+    await until(async () => !(await s.snapshot(data.id)).running);
+    assert.equal((await s.snapshot(data.id)).signal, 'SIGKILL');
+});
+
+test('/stop uses catchable SIGTERM while /kill forcefully terminates a process ignoring SIGTERM', async t => {
+    const s = setup(t);
+    const graceful = (await s.run({ command: `trap 'exit 0' TERM; pi-notify status ready; while :; do sleep 30; done`, yield_after: 0.01 })).structuredContent;
+    await until(async () => (await s.snapshot(graceful.id)).statusText === 'ready');
+    await s.commands.get('stop').handler(`${graceful.id} SIGKILL`, s.ctx);
+    assert.match(s.notices.at(-1), /Usage: \/stop id/);
+    await s.commands.get('stop').handler(graceful.id, s.ctx);
+    assert.match(s.notices.at(-1), /^Sent SIGTERM/);
+    await until(async () => !(await s.snapshot(graceful.id)).running);
+    assert.equal((await s.snapshot(graceful.id)).exitCode, 0);
+    const stubborn = (await s.run({ command: `trap '' TERM; pi-notify status ready; while :; do sleep 30; done`, yield_after: 0.01 })).structuredContent;
+    await until(async () => (await s.snapshot(stubborn.id)).statusText === 'ready');
+    await s.commands.get('stop').handler(stubborn.id, s.ctx);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal((await s.snapshot(stubborn.id)).running, true);
+    await s.commands.get('kill').handler(stubborn.id, s.ctx);
+    await until(async () => !(await s.snapshot(stubborn.id)).running);
+    assert.equal((await s.snapshot(stubborn.id)).signal, 'SIGKILL');
+});
+
 test('child status is visible to model queries and a live process picker without invoking the agent', async t => {
     const s = setup(t), flag = join(s.directory, 'continue');
     const data = (await s.run({ command: `pi-process status 'Compiling'; while [ ! -f '${flag}' ]; do sleep .03; done; pi-process status 'Linking'; sleep 30`, yield_after: 0.01 })).structuredContent;
     await until(async () => (await s.snapshot(data.id)).statusText === 'Compiling');
     assert.equal((await s.list())[0].statusText, 'Compiling');
     assert.ok(Date.parse((await s.snapshot(data.id)).statusUpdatedAt));
-    const picker = s.commands.get('pty-list').handler('', s.ctx);
+    const picker = s.commands.get('top').handler('', s.ctx);
     await until(() => s.dialog);
     assert.match(s.dialog.render(120).join('\n'), /Compiling/);
     writeFileSync(flag, '');
@@ -57,7 +92,7 @@ test('at most one IPC follow-up is outstanding; later messages wait locally for 
 test('private !! status is user-visible but absent from model queries; its notification is rejected', async t => {
     const s = setup(t);
     await s.events.get('user_bash')({ command: `pi-process status 'private-progress'; pi-process notify 'secret-notification'; sleep 30`, cwd: s.directory, excludeFromContext: true }, s.ctx);
-    const picker = s.commands.get('pty-list').handler('', s.ctx);
+    const picker = s.commands.get('top').handler('', s.ctx);
     await until(() => s.dialog && s.dialog.render(120).join('\n').includes('private-progress'));
     const entries = await s.list(), secret = entries.find(entry => entry.private);
     assert.equal(secret.statusText, undefined);

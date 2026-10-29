@@ -118,8 +118,9 @@ Previews refresh at most about 12 times/second.
 | Ctrl+Z while attached | Detach without stopping/suspending the process |
 | Ctrl+C while attached | Interrupt that session; pipe viewers also support Ctrl+C |
 | Ctrl+C in Pi | Normal Pi behavior; a pending foreground tool is cancelled, already-backgrounded jobs are untouched |
-| `/pty-list` | Recent-first picker: arrows or Ctrl+K/J, Enter selects, Esc closes |
-| `/pty-stop id [SIGTERM\|SIGINT\|SIGKILL]` | Signal a managed process group; default SIGTERM |
+| `/top` | Recent-first picker: arrows or Ctrl+K/J, Enter selects, Esc closes |
+| `/stop id` | Gracefully terminate a managed process group with SIGTERM |
+| `/kill id` | Force-kill a managed process group with SIGKILL |
 
 Collapsed previews show eight rows for ordinary shell output. Full-screen /
 alternate-screen applications show only process metadata and attach controls,

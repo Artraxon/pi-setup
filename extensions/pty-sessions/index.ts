@@ -203,7 +203,7 @@ export default function ptySessions(pi: ExtensionAPI) {
                 const visible = options.expanded ? lines.slice(0, end) : lines.slice(Math.max(0, end - 8), end);
                 return [truncateToWidth(theme.fg('muted', header), width),
                     ...visible.map(line => truncateToWidth(line, width)),
-                    truncateToWidth(theme.fg('muted', `Ctrl+O ${options.expanded ? 'collapses' : 'expands'} · Ctrl+click to ${session.tty ? 'attach' : 'view'} · /fg · /pty-list`), width)];
+                    truncateToWidth(theme.fg('muted', `Ctrl+O ${options.expanded ? 'collapses' : 'expands'} · Ctrl+click to ${session.tty ? 'attach' : 'view'} · /fg · /top`), width)];
             },
             invalidate() {},
         };
@@ -260,7 +260,7 @@ export default function ptySessions(pi: ExtensionAPI) {
         recent = session.id;
         pi.sendMessage({ customType: 'pty-preview', content: `PTY session ${session.id} started${event.excludeFromContext ? ' (private)' : ''}.`,
             display: true, details: { id: session.id } });
-        return { result: { output: `Started ${session.id} in background. Use /fg ${session.id} or /pty-list to attach.`,
+        return { result: { output: `Started ${session.id} in background. Use /fg ${session.id} or /top to attach.`,
             exitCode: 0, cancelled: false, truncated: false } };
     });
 
@@ -273,7 +273,7 @@ export default function ptySessions(pi: ExtensionAPI) {
             await attach(id, ctx);
         },
     });
-    pi.registerCommand('pty-list', {
+    pi.registerCommand('top', {
         description: 'Choose a managed process with arrows or Ctrl+J/Ctrl+K; Enter attaches to TTYs or views pipe output',
         handler: async (_args, ctx) => {
             const entries = sessions.list(false);
@@ -305,13 +305,14 @@ export default function ptySessions(pi: ExtensionAPI) {
         },
     });
 
-    pi.registerCommand('pty-stop', {
-        description: 'Stop a managed process: /pty-stop id [SIGTERM|SIGINT|SIGKILL]',
+    for (const [command, signal, description] of [
+        ['stop', 'SIGTERM', 'Gracefully terminate a managed process'],
+        ['kill', 'SIGKILL', 'Force-kill a managed process'],
+    ]) pi.registerCommand(command, {
+        description: `${description}: /${command} id (${signal})`,
         handler: async (args, ctx) => {
-            const [id, signal = 'SIGTERM', extra] = args.trim().split(/\s+/);
-            if (!id || extra || !['SIGTERM', 'SIGINT', 'SIGKILL'].includes(signal)) {
-                ctx.ui.notify('Usage: /pty-stop id [SIGTERM|SIGINT|SIGKILL]', 'warning'); return;
-            }
+            const [id, extra] = args.trim().split(/\s+/);
+            if (!id || extra) { ctx.ui.notify(`Usage: /${command} id`, 'warning'); return; }
             try { sessions.stop(id, signal, false); ctx.ui.notify(`Sent ${signal} to ${id}.`, 'info'); }
             catch (error) { ctx.ui.notify(label(String(error)), 'warning'); }
         },
