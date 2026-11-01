@@ -4,6 +4,8 @@ set -euo pipefail
 root_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 
+node "$root_dir/configure.mjs"
+
 install_extension() {
     local name="$1"
     shift

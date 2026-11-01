@@ -25,6 +25,21 @@ The installer works from any current directory. It installs into
 dependencies, and updates keybindings to free Ctrl+J/K for transcript selection.
 Other custom keybindings are preserved.
 
+The installer also merges agent configuration through `configure.mjs`:
+- `models.json`: override `openai/gpt-6.1-sol` and `openai/gpt-6-astra` to their
+  **1,050,000-token API context windows**, rather than Pi's 272,000-token catalog
+  limits. Other model metadata (including output limits and pricing) is preserved.
+  These are API limits; subscription-backed endpoints may impose smaller limits.
+  Requests over 272,000 input tokens can incur long-context pricing.
+- `settings.json`: disable `builtin:codemode` and remove codemode from the default
+  tools, preserving other extensions, tools, and preferences. This also prevents
+  MCP from automatically enabling the built-in codemode extension.
+
+Restart Pi after these configuration changes. Codemode examples below describe
+optional functionality: the codemode-only `extract_text` tool is unavailable
+with this installation default unless you explicitly re-enable codemode.
+`subagent_result` is a normal, directly exposed tool and does not need codemode.
+
 Run `/reload` after updating extensions. **Save active PTY work first:** reload
 terminates all managed processes and clears their retained output/logs. The native shell
 color patch changes Pi runtime files and requires a **Pi restart**, not just
@@ -38,6 +53,8 @@ inside Node and mix old backend code with a new extension entry point.
 
 ```text
 install.sh
+configure.mjs        Agent model limits and codemode defaults
+configure.test.mjs
 README.md
 test.sh
 extensions/

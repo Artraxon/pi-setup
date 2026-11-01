@@ -4,6 +4,7 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 npm ci --prefix extensions/pty-sessions --no-audit --no-fund
 node --test \
+    configure.test.mjs \
     extensions/pty-sessions/*.test.mjs \
     extensions/notifications/*.test.mjs \
     extensions/shared/*.test.mjs \
