@@ -5,6 +5,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 npm ci --prefix extensions/pty-sessions --no-audit --no-fund
 node --test \
     configure.test.mjs \
+    extensions/kitty-clipboard/*.test.mjs \
     extensions/pty-sessions/*.test.mjs \
     extensions/notifications/*.test.mjs \
     extensions/shared/*.test.mjs \
@@ -18,6 +19,7 @@ node --test \
     extensions/extract/paste.test.mjs \
     extensions/extract/tool.test.mjs
 node --experimental-strip-types --test \
+    extensions/kitty-clipboard/*.test.ts \
     extensions/clion-file-actions/clion.test.ts \
     extensions/clion-file-actions/references.test.ts \
     extensions/output-editor/index.test.ts \

@@ -5,6 +5,7 @@ root_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 
 node "$root_dir/configure.mjs"
+PI_CODING_AGENT_DIR="$agent_dir" pi install npm:pi-paster@0.2.3
 
 install_extension() {
     local name="$1"
@@ -22,6 +23,7 @@ install_extension clion-file-actions index.ts clion.ts inline.ts link-navigation
 rm -f "$agent_dir/extensions/clion-file-actions/shared.ts"
 install_extension compact-tools index.ts
 install_extension output-editor index.ts
+install_extension kitty-clipboard index.ts clipboard.mjs
 install_extension shared settings-hook.mjs selection-owner.mjs
 install_extension extract index.ts editor.ts core.ts settings.ts paste.ts tool.ts
 install_extension zsh-completion index.ts bridge.py complete.zsh
