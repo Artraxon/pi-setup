@@ -278,19 +278,28 @@ the complete text. Status is never included in model messages automatically.
 
 Limits are shared across endpoints: status 1024 UTF-8 bytes, burst 100/refill
 100 per second; notify 8192 bytes, burst 6/refill 6 per minute; 32 queued reports,
-32 active connections, 64 KiB frames and 3-second server/default-client deadlines.
+32 active connections, 64 KiB frames and a 3-second default helper-client deadline.
 Labels are assigned at creation, sanitized and limited to 128 UTF-8 bytes.
 Batching is 100 ms with at most 32 KiB serialized report data. Creating more
 sockets does not bypass global flood protection.
 
-Any Unix-socket client sends exactly a newline-terminated type/text object:
+Any Unix-socket client sends newline-terminated type/text objects:
 
 ```json
 {"type":"notify","text":"Build finished"}
 ```
 
+Connections may carry multiple messages, including several in one write or a
+message split across writes. The server keeps reading until EOF or endpoint
+shutdown, with no idle disconnect between messages. The frame limit applies to
+each message, not the entire stream. A NebulaStream File sink may prefix the
+stream with exactly `"type":VARSIZED:NOT_NULLABLE,"text":VARSIZED:NOT_NULLABLE`
+and a newline. This optional first-line schema header is consumed without an
+acknowledgement or a notification; subsequent lines must be JSON messages.
+
 The server attaches that socket's label. Identity/version/token fields are not
-accepted. Acknowledgements are `{"ok":true}` or
+accepted. Each message receives an acknowledgement without closing the connection.
+Acknowledgements are `{"ok":true}` or
 `{"ok":false,"error":"rate_limited"}`; other errors include `private_process`,
 `queue_full`, `text_too_large`, `frame_too_large` and `invalid_message`.
 Success means locally accepted, not guaranteed model delivery. Client failures
