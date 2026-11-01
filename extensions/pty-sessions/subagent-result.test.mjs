@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { setup, until } from './managed-fixture.mjs';
 import { initializeSubagent, turnFile, writeRecord } from './subagent-store.ts';
 
-test('registered result tool is codemode-only and returns only structured final text, including after process exit', async t => {
+test('registered result tool is directly exposed and returns only structured final text, including after process exit', async t => {
     const s = setup(t);
     const native = await s.run({ command: 'printf "%s\\n%s\\n" "$PI_PROCESS_ID" "$PI_PROCESS_DATA_DIR"', yield_after: 2 });
     const [id, directory] = native.structuredContent.output.trim().split('\n');
@@ -15,7 +15,7 @@ test('registered result tool is codemode-only and returns only structured final 
     initializeSubagent(directory, id);
     const record = { version: 1, id, turn: 1, status: 'completed', output: 'Compact handoff.', sessionFile: '/must/not/forward/session.jsonl' };
     writeRecord(directory, turnFile(1), record); writeRecord(directory, 'latest.json', record);
-    const tool = s.tools.get('subagent_result'); assert.equal(tool.exposure, 'codemode');
+    const tool = s.tools.get('subagent_result'); assert.equal(tool.exposure, 'direct');
     assert.ok(tool.outputSchema);
     const result = await tool.execute('test', { id });
     assert.deepEqual(result.structuredContent, { id, turn: 1, status: 'completed', output: 'Compact handoff.' });

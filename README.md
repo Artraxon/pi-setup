@@ -137,7 +137,7 @@ Model tools:
 - **`pty_write`** sends raw UTF-8 `data` to a public TTY; `submit: true` appends
   Enter. Private, exited, pipe and user-attached sessions are denied. Input is
   limited to 16 KiB. It does not attach or take keyboard focus.
-- **`subagent_result`** is codemode-only: retrieves a public child's saved final
+- **`subagent_result`** is directly exposed: retrieves a public child's saved final
   answer, not its terminal/history; see the subagent workflow below.
 
 ### Exit notifications, privacy and lifetime
@@ -318,13 +318,13 @@ Aborted, failed, tool-only and length-limited runs are not reported as completed
 answers. Starting a follow-up clears the current result to `running`, preventing
 an older answer from being mistaken for the new result.
 
-Retrieve with codemode `tools.subagent_result({ id: "pty-1" })`. It returns
+Call the `subagent_result` tool directly with `{ "id": "pty-1" }`. It returns
 `{id, turn, status, output}`; `turn` optionally selects a previous run.
 The default output limit is 8,000 characters, adjustable with `max_chars` (1–65,536).
 Truncated responses include `next_offset` and `result_file`; pass `offset` to read
 another page without repeating the prefix (offsets are UTF-16 indices).
 The artifact reader is deterministic and bounded: **no extra LLM extraction call**.
-The tool is codemode-only so its full schemas do not inflate the normal tool list.
+The tool is declared in the normal tool list and works with codemode disabled.
 Use snapshots only for steering/terminal diagnostics, never to collect final answers.
 Task prompts request a concise handoff of at most 200 words; keep detailed work in
 artifacts and consult it selectively.
