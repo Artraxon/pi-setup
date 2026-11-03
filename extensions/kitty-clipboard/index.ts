@@ -5,6 +5,7 @@ import { captureClipboardImage, isKittySession } from "./clipboard.mjs";
 export default function kittyClipboard(pi: ExtensionAPI, captureImage = captureClipboardImage) {
     const directories = new Set<string>();
     let busy = false;
+    let unsubscribe: (() => void) | undefined;
 
     async function paste(ctx: ExtensionContext) {
         if (ctx.mode !== "tui" || busy) return;
@@ -53,19 +54,32 @@ export default function kittyClipboard(pi: ExtensionAPI, captureImage = captureC
         }
     }
 
-    // An editor shortcut, not a global raw-input listener: dialogs and managed
-    // PTYs retain their own input. Other terminals keep their native Ctrl+V.
-    if (isKittySession()) {
-        pi.registerShortcut("ctrl+v", {
-            description: "Attach the host clipboard image through Kitty (including over SSH)",
-            handler: paste,
-        });
-    }
+    pi.on("session_start", async (_event, ctx) => {
+        unsubscribe?.();
+        unsubscribe = undefined;
+        if (ctx.mode !== "tui" || !isKittySession()) return;
+        await ctx.ui.custom<void>((tui, _theme, keybindings, done) => {
+            // Use the configured native paste action rather than registering a
+            // competing shortcut. Only app editors expose an image-paste handler;
+            // ordinary dialogs and attached PTYs retain their own input.
+            unsubscribe = ctx.ui.onTerminalInput(data => {
+                if (!keybindings.matches(data, "app.clipboard.pasteImage")) return;
+                const focused = tui.getFocusedComponent() as { onPasteImage?: unknown } | null;
+                if (typeof focused?.onPasteImage !== "function") return;
+                void paste(ctx);
+                return { consume: true };
+            });
+            done(undefined);
+            return { render: () => [], invalidate() {} };
+        }, { overlay: true });
+    });
     pi.registerCommand("kitty-paste", {
         description: "Attach the host clipboard image through Kitty without submitting the prompt",
         handler: async (_args, ctx) => paste(ctx),
     });
     pi.on("session_shutdown", () => {
+        unsubscribe?.();
+        unsubscribe = undefined;
         for (const directory of directories) rmSync(directory, { recursive: true, force: true });
         directories.clear();
     });

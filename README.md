@@ -390,7 +390,9 @@ on errors. Clipboard reads have a 30-second timeout and a 64 MiB image limit.
 Images are saved in private temporary directories and retained until Pi's
 extension runtime shuts down/reloads so pi-paster's source paths remain usable.
 Embedded attachments survive cleanup, but those temporary source paths do not.
-The Ctrl+V built-in-shortcut override diagnostic is expected in Kitty.
+The bridge follows Pi's configured `app.clipboard.pasteImage` keybinding
+(default Ctrl+V) without registering a conflicting extension shortcut. Input in
+dialogs and attached PTYs is left alone.
 
 ## Transcript selection into the prompt
 
