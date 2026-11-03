@@ -2,8 +2,8 @@
 
 A self-contained collection of Pi extensions, with an installer and tests. This
 folder can be copied/extracted into its own repository without changing its
-internal paths. It currently lives inside the parent project's devcontainer;
-it does not contain a nested Git repository.
+internal paths. The parent project's devcontainer keeps a standalone checkout
+of this repository.
 
 ## Requirements and installation
 
@@ -20,10 +20,22 @@ From this folder (or its future standalone repository root):
 bash install.sh
 ```
 
-The installer works from any current directory. It installs into
-`${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/extensions`, installs pinned PTY runtime
-dependencies, and updates keybindings to free Ctrl+J/K for transcript selection.
-Other custom keybindings are preserved.
+The installer works from any current directory. It symlinks managed extension
+directories, the subagent skill, and its prompt into
+`${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}`, installs pinned PTY runtime dependencies
+beside the source in `extensions/pty-sessions/node_modules`, and updates
+keybindings to free Ctrl+J/K for transcript selection. Other custom keybindings
+and unrelated installed extensions are preserved.
+
+Existing copies or different symlinks are moved into a unique directory under
+`<agent-dir>/install-backups/` before linking; local edits and old dependencies
+are preserved there, outside Pi's resource discovery. Rerunning the installer
+leaves correct links alone. Keep this checkout available at the same absolute
+path while using Pi; if you move it, rerun the installer from its new location.
+Repository updates now reach the installed resources without another copy step:
+run `/reload` (or restart Pi) to load updated extension code. Native ESM helpers
+may require a restart. Rerun the installer when dependencies, the managed resource
+list, configuration, or Pi runtime patches change.
 
 It also installs **pi-paster**, pinned to the published npm version **0.2.3**:
 
@@ -80,8 +92,8 @@ extensions/
 ```
 
 Tests live beside their extension. Dependencies and generated caches are ignored.
-The installer copies runtime files only, not test entry points, into Pi's
-extension directories.
+The installer links whole managed resource directories. Tests remain beside the
+source; Pi loads each extension's `index.ts`, not the adjacent test files.
 
 ## Managed processes and interactive PTY sessions
 

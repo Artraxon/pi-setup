@@ -5,6 +5,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 npm ci --prefix extensions/pty-sessions --no-audit --no-fund
 node --test \
     configure.test.mjs \
+    link-resources.test.mjs \
     extensions/kitty-clipboard/*.test.mjs \
     extensions/pty-sessions/*.test.mjs \
     extensions/notifications/*.test.mjs \
