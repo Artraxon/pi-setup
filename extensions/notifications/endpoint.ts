@@ -3,10 +3,7 @@ import { chmodSync, unlinkSync } from 'node:fs';
 import { delimiter, dirname } from 'node:path';
 
 export const IPC_LIMITS = Object.freeze({ frameBytes: 65536, statusBytes: 1024, notifyBytes: 8192,
-    labelBytes: 128, connections: 32, queue: 32, batchMs: 100, batchBytes: 32768 });
-
-// Optional first line emitted by NebulaStream's File sink for notification output.
-const NEBULASTREAM_SCHEMA = '"type":VARSIZED:NOT_NULLABLE,"text":VARSIZED:NOT_NULLABLE';
+    labelBytes: 128, connections: 32, queue: 32, idleMs: 3000, batchMs: 100, batchBytes: 32768 });
 
 // One socket, one parent-assigned label. Clients never send their identity.
 export class NotificationEndpoint {
@@ -34,32 +31,27 @@ export class NotificationEndpoint {
         if (this.closed || this.connections.size >= IPC_LIMITS.connections) { socket.destroy(); return; }
         this.sockets.add(socket); this.connections.add(socket);
         socket.unref();
+        socket.setTimeout(IPC_LIMITS.idleMs, () => socket.destroy());
+        const deadline = setTimeout(() => socket.destroy(), IPC_LIMITS.idleMs); deadline.unref();
         socket.on('error', () => {});
-        socket.once('close', () => { this.sockets.delete(socket); this.connections.delete(socket); });
-        socket.on('drain', () => socket.resume());
-        let buffer = Buffer.alloc(0), failed = false, firstFrame = true;
-        const fail = error => {
-            failed = true; socket.end(`${JSON.stringify({ ok: false, error })}\n`);
+        socket.once('close', () => { clearTimeout(deadline); this.sockets.delete(socket); this.connections.delete(socket); });
+        let buffer = Buffer.alloc(0), answered = false;
+        const reply = result => {
+            if (answered) return;
+            answered = true; socket.end(`${JSON.stringify(result)}\n`);
         };
         socket.on('data', chunk => {
-            if (failed) return;
+            if (answered) return;
+            if (buffer.length + chunk.length > IPC_LIMITS.frameBytes) { reply({ ok: false, error: 'frame_too_large' }); return; }
             buffer = Buffer.concat([buffer, chunk]);
-            let newline;
-            while ((newline = buffer.indexOf(10)) >= 0) {
-                if (newline + 1 > IPC_LIMITS.frameBytes) { fail('frame_too_large'); return; }
-                const frame = buffer.subarray(0, newline).toString('utf8');
-                buffer = buffer.subarray(newline + 1);
-                const isSchema = firstFrame && frame === NEBULASTREAM_SCHEMA;
-                firstFrame = false;
-                if (isSchema) continue;
-                let result;
-                try { result = this.onMessage(JSON.parse(frame)); }
-                catch { fail('invalid_message'); return; }
-                if (!socket.write(`${JSON.stringify(result)}\n`)) socket.pause();
-            }
-            if (buffer.length > IPC_LIMITS.frameBytes) fail('frame_too_large');
+            const newline = buffer.indexOf(10);
+            if (newline < 0) return;
+            try {
+                if (buffer.subarray(newline + 1).toString('utf8').trim()) throw new Error('extra frame');
+                reply(this.onMessage(JSON.parse(buffer.subarray(0, newline).toString('utf8'))));
+            } catch { reply({ ok: false, error: 'invalid_message' }); }
         });
-        socket.once('end', () => { if (!failed && buffer.length) fail('incomplete_message'); });
+        socket.once('end', () => { if (!answered) reply({ ok: false, error: 'incomplete_message' }); });
     }
     close() {
         if (this.closed) return;
