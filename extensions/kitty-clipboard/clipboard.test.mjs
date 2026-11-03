@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, openSync, closeSync, ftruncateSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import test from "node:test";
-import { captureClipboardImage, isKittySession } from "./clipboard.mjs";
+import { captureClipboardImage, isKittySession, MAX_IMAGE_BYTES } from "./clipboard.mjs";
 
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=", "base64");
 
@@ -13,63 +13,52 @@ test("recognizes Kitty directly and through forwarded Kitty environment", () => 
     assert.equal(isKittySession({ TERM: "xterm-256color" }), false);
 });
 
-test("uses the working Kitty image command, inherited terminal, and a hard timeout", () => {
+test("captures PNG bytes in memory, with piped binary stdout/stderr and a bounded deadline", () => {
     const image = captureClipboardImage((command, args, options) => {
         assert.equal(command, "kitten");
-        assert.deepEqual(args.slice(0, 2), ["clipboard", "--get-clipboard"]);
-        assert.equal(options.stdio, "inherit");
+        assert.deepEqual(args, ["clipboard", "--get-clipboard", "--mime", "image/png", "/dev/stdout"]);
+        assert.deepEqual(options.stdio, ["inherit", "pipe", "pipe"]);
+        assert.equal(options.encoding, undefined, "never decode binary PNG bytes as UTF-8");
+        assert.equal(options.maxBuffer, MAX_IMAGE_BYTES);
         assert.equal(options.timeout, 30_000);
         assert.equal(options.killSignal, "SIGKILL");
-        writeFileSync(args[2], png);
-        return { status: 0 };
+        return { status: 0, stdout: png };
     });
-    try {
-        assert.equal(statSync(image.directory).mode & 0o777, 0o700);
-        assert.equal(statSync(image.path).mode & 0o777, 0o600);
-    } finally {
-        rmSync(image.directory, { recursive: true, force: true });
-    }
+    assert.deepEqual(image, { type: "image", mimeType: "image/png", data: png.toString("base64") });
+    assert.equal(image.path, undefined);
 });
 
-for (const [name, prepare, result, message] of [
-    ["missing executable", () => {}, { error: { code: "ENOENT" } }, /remote PATH/],
-    ["timeout", () => {}, { error: { code: "ETIMEDOUT" } }, /timed out/],
-    ["permission denial or no image", () => {}, { status: 1 }, /Copy an image/],
-    ["signal", () => {}, { status: null, signal: "SIGTERM" }, /Could not read/],
-    ["missing output", () => {}, { status: 0 }, /ENOENT/],
-    ["empty output", path => writeFileSync(path, ""), { status: 0 }, /empty/],
-    ["non-image output", path => writeFileSync(path, "not an image"), { status: 0 }, /PNG/],
-    ["oversized output", path => {
-        const fd = openSync(path, "w");
-        try { ftruncateSync(fd, 64 * 1024 * 1024 + 1); } finally { closeSync(fd); }
-    }, { status: 0 }, /64 MiB/],
-]) {
-    test(`${name} fails clearly and removes temporary files`, () => {
-        let directory;
-        assert.throws(() => captureClipboardImage((_command, args) => {
-            directory = dirname(args[2]);
-            prepare(args[2]);
-            return result;
-        }), message);
-        assert.ok(directory);
-        assert.equal(existsSync(directory), false);
-    });
-}
+for (const [name, result, message] of [
+    ["missing executable", { error: { code: "ENOENT" } }, /remote PATH/],
+    ["timeout", { error: { code: "ETIMEDOUT" } }, /timed out/],
+    ["bounded capture overflow", { error: { code: "ENOBUFS" } }, /64 MiB/],
+    ["unexpected subprocess failure", { error: new Error("do not echo clipboard bytes") }, /Could not read/],
+    ["permission denial or no image", { status: 1 }, /Copy an image/],
+    ["signal", { status: null, signal: "SIGTERM" }, /Could not read/],
+    ["missing output", { status: 0 }, /empty/],
+    ["empty output", { status: 0, stdout: Buffer.alloc(0) }, /empty/],
+    ["decoded text instead of bytes", { status: 0, stdout: "not binary" }, /PNG/],
+    ["non-image bytes", { status: 0, stdout: Buffer.from("not an image") }, /PNG/],
+]) test(`${name} fails clearly without echoing helper output`, () => {
+    assert.throws(() => captureClipboardImage(() => ({ ...result, stderr: Buffer.from("sensitive helper output") })), message);
+});
 
-test("real subprocess invocation works with a fake kitten, without reading the host clipboard", () => {
+test("oversized output is rejected even if a runner failed to enforce maxBuffer", () => {
+    assert.throws(() => captureClipboardImage(() => ({ status: 0, stdout: Buffer.alloc(MAX_IMAGE_BYTES + 1) })), /64 MiB/);
+});
+
+test("real subprocess returns bytes, not an image file, and captures helper diagnostics", () => {
     const bin = mkdtempSync(join(tmpdir(), "pi-fake-kitten-"));
     const oldPath = process.env.PATH;
-    let image;
     try {
         const command = join(bin, "kitten");
-        writeFileSync(command, `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.argv[4], Buffer.from('${png.toString("base64")}', 'base64'));\n`);
+        writeFileSync(command, `#!/usr/bin/env node\nprocess.stderr.write('helper diagnostic must not reach Pi'); process.stdout.write(Buffer.from('${png.toString("base64")}', 'base64'));\n`);
         chmodSync(command, 0o700);
         process.env.PATH = `${bin}:${oldPath}`;
-        image = captureClipboardImage();
-        assert.equal(statSync(image.path).size, png.length);
+        assert.deepEqual(captureClipboardImage(), { type: "image", mimeType: "image/png", data: png.toString("base64") });
+        assert.deepEqual(readdirSync(bin), ["kitten"], "no clipboard image file created");
     } finally {
         process.env.PATH = oldPath;
-        if (image) rmSync(image.directory, { recursive: true, force: true });
         rmSync(bin, { recursive: true, force: true });
     }
 });

@@ -20,6 +20,14 @@ export function configureModels(config) {
 }
 
 export function configureSettings(settings) {
+    // Clipboard staging now uses Pi's native editor/input pipeline. Remove the
+    // formerly installed paster package so its editor and preview hooks cannot
+    // run alongside ours. Unrelated package declarations/resources are retained.
+    if (Array.isArray(settings.packages)) settings.packages = settings.packages.filter(entry => {
+        const source = typeof entry === "string" ? entry : entry?.source;
+        return typeof source !== "string" || !(/^npm:pi-paster(?:@[^/]*)?$/.test(source)
+            || /^git:(?:https:\/\/)?github\.com\/beowulf11\/pi-paster(?:\.git)?(?:@.*)?$/.test(source));
+    });
     settings.extensions = (settings.extensions ?? []).filter(
         (entry) => !["builtin:codemode", "+builtin:codemode", "-builtin:codemode"].includes(entry),
     );

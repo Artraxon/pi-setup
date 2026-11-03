@@ -6,7 +6,6 @@ agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 export PI_CODING_AGENT_DIR="$agent_dir"
 
 node "$root_dir/configure.mjs"
-pi install npm:pi-paster@0.2.3
 # Dependencies belong beside the linked source, not in the agent directory.
 npm ci --prefix "$root_dir/extensions/pty-sessions" --no-audit --no-fund
 node "$root_dir/link-resources.mjs"

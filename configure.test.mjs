@@ -33,6 +33,17 @@ test("disables codemode while preserving unrelated settings and tool selections"
     }
 });
 
+test("removes only retired paster package entries while preserving unrelated packages", () => {
+    const keep = ["npm:pi-paster-tools", "npm:@example/pi-paster", "npm:another-extension", { source: "./custom", extensions: ["x.ts"] }];
+    const settings = configureSettings({ packages: [
+        "npm:pi-paster", "npm:pi-paster@0.2.3", { source: "npm:pi-paster@0.2.3", extensions: ["src/index.ts"] },
+        "git:github.com/beowulf11/pi-paster@old", "git:https://github.com/beowulf11/pi-paster.git@old", ...keep,
+    ] });
+    assert.deepEqual(settings.packages, keep);
+    assert.deepEqual(configureSettings(settings).packages, keep);
+    assert.equal(configureSettings({}).packages, undefined);
+});
+
 test("CLI honors PI_CODING_AGENT_DIR and installation is repeatable", () => {
     const dir = mkdtempSync(join(tmpdir(), "pi-config-test-"));
     try {

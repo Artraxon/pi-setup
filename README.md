@@ -37,13 +37,10 @@ run `/reload` (or restart Pi) to load updated extension code. Native ESM helpers
 may require a restart. Rerun the installer when dependencies, the managed resource
 list, configuration, or Pi runtime patches change.
 
-It also installs **pi-paster**, pinned to the published npm version **0.2.3**:
-
-```sh
-pi install npm:pi-paster@0.2.3
-```
-
-No Git checkout, Corepack, or pnpm bootstrap is needed.
+Clipboard image staging uses Pi's native editor and input pipeline, not
+**pi-paster**. The installer removes the old npm/official Git paster package
+entries from Pi settings so its editor replacement and extra preview messages
+do not run alongside the clipboard bridge. Unrelated packages are preserved.
 
 The installer also merges agent configuration through `configure.mjs`:
 - `models.json`: override `openai/gpt-6.1-sol` and `openai/gpt-6-astra` to their
@@ -81,7 +78,7 @@ extensions/
   clion-file-actions/   Inline CLion navigation and /clion
   compact-tools/       One-line collapsed tool summaries
   extract/             Editor capture and extraction with a separate model
-  kitty-clipboard/     Host clipboard images over SSH via Kitty and pi-paster
+  kitty-clipboard/     In-memory host clipboard attachments over Kitty SSH
   message-selection/   Ctrl+K/J transcript selection into the prompt
   notifications/       Labeled local sockets, shared inbox and report renderer
   output-editor/       Edit response/block text into the prompt
@@ -388,29 +385,41 @@ children stay open for further work rather than exiting after the first answer.
 
 ## Host clipboard images through Kitty over SSH
 
-With Pi running in Kitty, **Ctrl+V** retrieves the host's clipboard image through
-`kitten clipboard --get-clipboard`, then passes it directly to pi-paster. The
-prompt gains an `[#image N]` attachment at the cursor; existing draft text is
-preserved and nothing is submitted. There are no manual file-transfer commands
-or paths to paste. `/kitty-paste` invokes the same action if a terminal keybinding
-captures Ctrl+V. Use this Pi shortcut, not Kitty's ordinary text-paste shortcut
-(Ctrl+Shift+V / Cmd+V).
+With Pi running in Kitty, **Ctrl+V** captures the host's clipboard PNG directly
+into memory with `kitten clipboard --get-clipboard --mime image/png /dev/stdout`.
+The native editor receives a removable `[#image <short-id>]` marker at the cursor;
+existing draft text and cursor placement are preserved. Nothing is submitted or
+uploaded until you submit the prompt. No temporary image file, path mapping,
+editor replacement, cursor-preview widget, or separate preview/follow-up message
+is created. `/kitty-paste` invokes the same action if a terminal keybinding
+captures Ctrl+V.
 
-Requirements: the pinned pi-paster package must be enabled, and `kitten` must be
-on the **remote** PATH (Kitty's SSH kitten supplies it in this environment).
-Allow Kitty's clipboard-access prompt when asked. Copy an **image**, rather than
-a file-manager file reference or text. This bridge handles image paste only;
-ordinary terminal text paste is unchanged. Other terminals retain their native
-Ctrl+V, and RPC/print modes do not access the clipboard.
+On submission, the input hook attaches the referenced image bytes to that same
+user turn, including steer/follow-up inputs while the agent is busy. Deleting a
+marker prevents its image from being attached. Repeated markers attach an image
+only once; multiple images follow marker order. Existing Pi-supplied images are
+preserved. Other extensions' or RPC prompts never pick up draft attachments.
+Submitted images are saved/sent through Pi's normal session/provider pipeline;
+"in memory" describes staging, not a promise of no session persistence.
 
-Pi temporarily stops its TUI while kitten owns the terminal, restoring it even
-on errors. Clipboard reads have a 30-second timeout and a 64 MiB image limit.
-Images are saved in private temporary directories and retained until Pi's
-extension runtime shuts down/reloads so pi-paster's source paths remain usable.
-Embedded attachments survive cleanup, but those temporary source paths do not.
+Requirements: `kitten` must be on the **remote** PATH (Kitty's SSH kitten supplies
+it in this environment). Allow Kitty's clipboard-access prompt when asked. Copy
+an **image**, rather than a file-manager file reference or text. This bridge
+handles image paste only; ordinary terminal text paste (Ctrl+Shift+V / Cmd+V) is
+unchanged. Other terminals retain their native Ctrl+V, and RPC/print modes do not
+access the clipboard. Paster is not required.
+
+Pi temporarily stops its TUI while kitten owns the controlling terminal,
+restoring and redrawing it even on errors. Binary stdout and helper diagnostics
+are captured, never printed into Pi. Clipboard reads have a 30-second timeout
+and 64 MiB limit; staged draft images are bounded to 32 images / 64 MiB total.
+Unreferenced images are reclaimed on the next paste. Reload, shutdown or session
+switch discards staged bytes; a stale marker blocks submission with a warning
+instead of silently sending a prompt without its image. Paste the image again
+or remove the stale marker. Already submitted image content is unaffected.
 The bridge follows Pi's configured `app.clipboard.pasteImage` keybinding
-(default Ctrl+V) without registering a conflicting extension shortcut. Input in
-dialogs and attached PTYs is left alone.
+(default Ctrl+V) without registering a competing shortcut. Input in dialogs and
+attached PTYs is left alone.
 
 ## Transcript selection into the prompt
 
