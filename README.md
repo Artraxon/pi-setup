@@ -160,10 +160,12 @@ Previews refresh at most about 12 times/second.
 | `/stop id` | Gracefully terminate a managed process group with SIGTERM |
 | `/kill id` | Force-kill a managed process group with SIGKILL |
 
-Collapsed previews show eight rows for ordinary shell output. Full-screen /
-alternate-screen applications show only process metadata and attach controls,
-not their startup logos/help headers, including after Ctrl+Z. Expanded previews
-still show the screen and up to 2000 retained scrollback lines. Pipe viewers support arrows/PageUp/PageDown to
+While a process is running, collapsed previews show eight rows for ordinary shell
+output. Full-screen / alternate-screen applications show only process metadata
+and attach controls, not their startup logos/help headers, including after Ctrl+Z.
+Once a process exits, its collapsed preview disappears; output remains available
+in expanded history, `/fg id`, and `pty_snapshot` until shutdown or eviction.
+Expanded previews still show the screen and up to 2000 retained scrollback lines. Pipe viewers support arrows/PageUp/PageDown to
 scroll and Esc/Enter/Ctrl+Z to close; typing does not send stdin. Selecting an
 exited process shows its retained output. TTY attachment supports Kitty and
 modifyOtherKeys Ctrl+C/Z encodings and interactive/full-screen programs.
@@ -186,6 +188,10 @@ Public `!` jobs also notify on exit. Notifications contain lifecycle metadata,
 not command output, and do not steer/interrupt a current turn. They can start a
 new agent turn when idle, so normal model usage charges may apply. Foreground
 completions are already returned by `bash` and do not send duplicate notifications.
+In the TUI, each exit renders as one width-truncated line with the same themed
+pink `↩` as process messages, the process ID, exit/signal status, and command.
+There is no purple fallback notification box or automatic output dump. Summary
+metadata survives reload; captured output retains its normal runtime lifetime.
 Inspect output explicitly through snapshots or the public log.
 
 **Private `!!` output stays in memory only:** no disk capture, no exit notification,

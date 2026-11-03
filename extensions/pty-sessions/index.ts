@@ -44,7 +44,7 @@ export default function ptySessions(pi: ExtensionAPI) {
         try {
             pi.sendMessage({ customType: 'process-exit',
                 content: `Background process ${session.id} finished (${status}${session.timedOut ? '; hard timeout' : ''}). Use pty_snapshot with this ID to inspect output if relevant. This is a lifecycle notification, not a request to restart the command.`,
-                display: true, details: { id: session.id, exitCode: session.exitCode, signal: session.signal, timedOut: !!session.timedOut } },
+                display: true, details: { id: session.id, command: session.command, exitCode: session.exitCode, signal: session.signal, timedOut: !!session.timedOut } },
                 { triggerTurn: true, deliverAs: 'followUp' });
         } catch (error) { context?.ui.notify(`Process completion notification failed: ${label(String(error))}`, 'warning'); }
     }, notifications);
@@ -185,12 +185,35 @@ export default function ptySessions(pi: ExtensionAPI) {
             display: true, details: { id: session.id } }, { triggerTurn: false });
     }, session => { recent = session.id; });
 
+    pi.registerMessageRenderer('process-exit', (message, _options, theme) => {
+        // Persisted details, not the live process map: summaries must survive a
+        // reload without picking up a different job that reused the same ID.
+        const details = message.details as { id?: string; command?: string; exitCode?: number; signal?: string | number; timedOut?: boolean } | undefined;
+        const status = details?.signal ? `signal ${details.signal}` : `exit ${details?.exitCode ?? '?'}`;
+        return {
+            render(width: number) {
+                // Match the existing compact process-message notification style.
+                const arrow = theme.fg('customMessageLabel', '↩ ');
+                const failed = !!details?.signal || details?.exitCode !== 0 || !!details?.timedOut;
+                const fields = [theme.fg('muted', label(details?.id ?? 'process')),
+                    theme.fg(failed ? 'error' : 'success', label(status))];
+                if (details?.timedOut) fields.push(theme.fg('muted', 'hard timeout'));
+                if (details?.command) fields.push(theme.fg('muted', label(details.command)));
+                return [truncateToWidth(arrow + fields.join(theme.fg('muted', ' · ')), width, '…')];
+            },
+            invalidate() {},
+        };
+    });
+
     pi.registerMessageRenderer('pty-preview', (message, options, theme) => {
         const id = (message.details as { id: string }).id;
         const content = {
             render(width: number) {
                 const session = sessions.sessions.get(id);
-                if (!session) return [theme.fg('muted', `${id} · PTY unavailable after restart/reload`)];
+                if (!session) return options.expanded ? [truncateToWidth(theme.fg('muted', `${id} · PTY unavailable after restart/reload`), width)] : [];
+                // Completion has its own compact summary. Keep the output only
+                // in expanded history/viewers instead of repeating it forever.
+                if (!session.running && !options.expanded) return [];
                 const status = session.running ? 'running' : session.signal ? `signal ${session.signal}` : `exit ${session.exitCode}`;
                 const header = `${id} · ${status} · ${session.tty ? 'TTY' : 'no TTY'}${session.privateOutput ? ' · private !!' : ''}${session.statusText ? ` · ${label(session.statusText)}` : ''} · ${label(session.command)}`;
                 const buffer = session.terminal.buffer.active;
