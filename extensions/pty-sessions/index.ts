@@ -179,8 +179,10 @@ export default function ptySessions(pi: ExtensionAPI) {
 
     registerManagedBash(pi, sessions, shellConfig, (session, ctx) => {
         if (ctx.mode !== 'tui') return;
+        // Display at the safe end-of-tool boundary, not on the next prompt;
+        // never steer an active run just to add a process preview.
         pi.sendMessage({ customType: 'pty-preview', content: `Managed process ${session.id} continues in background.`,
-            display: true, details: { id: session.id } }, { deliverAs: 'nextTurn' });
+            display: true, details: { id: session.id } }, { triggerTurn: false });
     }, session => { recent = session.id; });
 
     pi.registerMessageRenderer('pty-preview', (message, options, theme) => {

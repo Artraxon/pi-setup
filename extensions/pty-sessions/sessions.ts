@@ -64,7 +64,10 @@ export class Sessions {
         }
         const tty = options.tty ?? true;
         const id = `pty-${this.next++}`;
-        const terminal = new Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true, convertEol: !tty });
+        // Headless parsing must never write to Pi's real terminal. xterm's
+        // default console logger dumps malformed child escape sequences there,
+        // corrupting the TUI cursor/layout (and potentially exposing !! output).
+        const terminal = new Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true, convertEol: !tty, logLevel: 'off' });
         let env = Object.fromEntries(Object.entries(options.env ?? process.env).filter(([, value]) => value !== undefined));
         delete env.PI_WEB_PASSWORD;
         if (env.FORCE_COLOR === '1') delete env.FORCE_COLOR;
