@@ -11,7 +11,7 @@ const { loadPromptTemplates, expandPromptTemplate } = await import(resolve(sdk, 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
 test('subagent skill is valid, small and mandates a fresh fully interactive TUI', () => {
-    const result = loadSkillsFromDir({ dir: resolve(root, 'skills'), source: 'test' });
+    const result = loadSkillsFromDir({ dir: resolve(root, 'skills/subagent'), source: 'test' });
     assert.deepEqual(result.diagnostics, []);
     assert.equal(result.skills.length, 1);
     assert.equal(result.skills[0].name, 'subagent');
