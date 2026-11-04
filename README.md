@@ -11,8 +11,8 @@ of this repository.
 - Node.js **22.23+**, npm, Python 3, and Zsh. Native `node-pty` installation may
   require a C/C++ compiler and Python if a suitable prebuilt binary is unavailable.
 - An external editor (`VISUAL`, then `EDITOR`, then `vim` for output editing).
-- CLion's Index MCP Server with a project open and `ide_open_file` enabled for
-  editor navigation. Other extensions do not require CLion.
+- A JetBrains IDE's Index MCP Server with a project open and `ide_open_file`
+  enabled for editor navigation. Other extensions do not require a JetBrains IDE.
 
 From this folder (or its future standalone repository root):
 
@@ -75,7 +75,7 @@ configure.test.mjs
 README.md
 test.sh
 extensions/
-  clion-file-actions/   Inline CLion navigation and /clion
+  clion-file-actions/   Inline JetBrains IDE navigation and /clion
   compact-tools/       One-line collapsed tool summaries
   extract/             Editor capture and extraction with a separate model
   kitty-clipboard/     In-memory host clipboard attachments over Kitty SSH
@@ -439,9 +439,9 @@ Selection ownership uses proxy-safe identity tokens shared with CLion link
 navigation. Shutdown releases the underlying TUI callback and deactivates retained
 input/cancel handlers, preventing stale extension-context access after reload.
 
-## Inline CLion links
+## Inline IDE links
 
-Inline Markdown links to existing project files open in the current CLion project.
+Inline Markdown links to existing project files open in the selected JetBrains IDE project.
 No visible file-list widget is added. Coordinates such as `:line:column` and
 `#Lline` are preserved.
 
@@ -468,12 +468,28 @@ or a byte-level prohibition on literal paths in commands and logs.
 - **`/clion path:line:column`** opens a specific existing project file.
 
 The extension calls Index MCP Server directly—no browser, OS URL handler, port
-forwarding, or CLion launcher is involved. The endpoint defaults to
-`http://127.0.0.1:29177/index-mcp/streamable-http`. Set **`NES_CLION_MCP_URL`** before
-starting Pi to override it (the existing variable name is retained for compatibility).
+forwarding, or IDE launcher is involved. At startup and **`/reload`**, it probes
+`http://127.0.0.1:<port>/index-mcp/streamable-http` on the plugin's documented ports
+**29170–29181**, in order: IntelliJ IDEA, Android Studio, PyCharm, WebStorm, GoLand,
+PhpStorm, RubyMine, CLion, RustRover, DataGrip, Aqua, DataSpell. Probes run in
+parallel with a 1.5-second timeout each, but selection follows that fixed order,
+not response speed. Only endpoints advertising `ide_open_file` qualify. Discovery
+only lists tools; it never opens a file.
+
+**`/settings` → IDE file links** shows the selected IDE and host/port. Press Enter
+to see available endpoints and choose another; the change applies immediately.
+An explicit choice is saved in `<agent-dir>/ide-file-links.json` and restored on
+startup/reload if that endpoint is still available. Otherwise the first available
+endpoint is selected. If none qualify, the row shows **None found**; enable the
+plugin/tool and run `/reload` to retry discovery.
+
+Set **`NES_CLION_MCP_URL`** before starting Pi to add a custom endpoint as the first
+discovery candidate (the variable name is retained for compatibility). An available
+saved manual selection takes precedence. This also supports non-default ports.
 Only existing files inside Pi's working directory are eligible; directories,
 missing paths, code-fenced references, and symlinks escaping the project are
-excluded. The backend must have the project open and `ide_open_file` enabled.
+excluded. The selected backend must have the project open and `ide_open_file`
+enabled. `/clion` remains the command name for compatibility, regardless of IDE.
 
 ## Extract a large blob with a separate model
 

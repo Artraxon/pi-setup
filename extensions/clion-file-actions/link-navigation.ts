@@ -74,7 +74,7 @@ export function installLinkNavigation(host: any, theme: any, ctx: any, open: (re
         };
         restore = () => { target.component.render = original; };
         claimSelection(host, owner, clear);
-        ctx.ui.setStatus('clion-link-selection', `CLion: ${target.reference.label} · Alt+K/J moves · Enter opens · Esc cancels`);
+        ctx.ui.setStatus('clion-link-selection', `IDE: ${target.reference.label} · Alt+K/J moves · Enter opens · Esc cancels`);
         const scroll = host.getPrimaryScrollView?.();
         let viewport: any;
         function find(box: any) {

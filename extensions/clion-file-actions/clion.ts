@@ -1,6 +1,7 @@
 import { realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { requestIde } from "./ide.ts";
 
 export interface FileReference {
 	file: string;
@@ -51,35 +52,18 @@ export function extractFileReferences(text: string, projectPath: string): FileRe
 	return [...references.values()];
 }
 
-/** Use editor navigation in the existing project, never a CLion project launcher. */
-export async function openInClion(reference: FileReference, projectPath: string): Promise<void> {
-	const response = await fetch(
-		process.env.NES_CLION_MCP_URL ?? "http://127.0.0.1:29177/index-mcp/streamable-http",
-		{
-			method: "POST",
-			headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
-			body: JSON.stringify({
-				jsonrpc: "2.0",
-				id: 1,
-				method: "tools/call",
-				params: {
-					name: "ide_open_file",
-					arguments: {
-						project_path: projectPath,
-						file: reference.file,
-						...(reference.line === undefined ? {} : { line: reference.line }),
-						...(reference.column === undefined ? {} : { column: reference.column }),
-					},
-				},
-			}),
-			signal: AbortSignal.timeout(15_000),
+/** Use editor navigation in the selected IDE's existing project, never a project launcher. */
+export async function openInClion(reference: FileReference, projectPath: string, endpointUrl: string): Promise<void> {
+	const result = await requestIde<{ content?: { type: string; text?: string }[]; isError?: boolean }>(endpointUrl, "tools/call", {
+		name: "ide_open_file",
+		arguments: {
+			project_path: projectPath,
+			file: reference.file,
+			...(reference.line === undefined ? {} : { line: reference.line }),
+			...(reference.column === undefined ? {} : { column: reference.column }),
 		},
-	);
-	if (!response.ok) throw new Error(`CLion MCP returned HTTP ${response.status}`);
-	const payload = await response.json();
-	if (payload.error) throw new Error(payload.error.message ?? "CLion MCP request failed");
-	const text = payload.result?.content?.filter((block: { type: string }) => block.type === "text")
-		.map((block: { text: string }) => block.text).join("\n");
-	if (payload.result?.isError) throw new Error(text || "CLion could not open the file");
-	if (!text || JSON.parse(text).opened !== true) throw new Error("CLion did not confirm opening the file");
+	});
+	const text = result.content?.filter(block => block.type === "text").map(block => block.text).join("\n");
+	if (result.isError) throw new Error(text || "IDE could not open the file");
+	if (!text || JSON.parse(text).opened !== true) throw new Error("IDE did not confirm opening the file");
 }
