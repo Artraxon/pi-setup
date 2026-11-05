@@ -12,7 +12,8 @@ const { createJiti } = require('jiti');
 const root = resolve(dirname(executable), '../..');
 const jiti = createJiti(import.meta.url, { alias: {
     '@earendil-works/pi-tui': resolve(root, 'node_modules/@earendil-works/pi-tui/dist/index.js'),
-    '@earendil-works/pi-ai': resolve(root, 'node_modules/@earendil-works/pi-ai/dist/index.js'),
+    // Match Pi's extension-facing view, including its TypeBox exports.
+    '@earendil-works/pi-ai': resolve(root, 'dist/core/extensions/pi-ai-extension-view.js'),
 } });
 const { registerExtractionTool } = await jiti.import(fileURLToPath(new URL('./tool.ts', import.meta.url)));
 const { saveExtractionModel } = await jiti.import(fileURLToPath(new URL('./settings.ts', import.meta.url)));

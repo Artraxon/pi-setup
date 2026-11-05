@@ -12,14 +12,15 @@ const require = createRequire(executable);
 const { createJiti } = require('jiti');
 const packageRoot = resolve(dirname(executable), '../..');
 const jiti = createJiti(import.meta.url, { alias: {
-    '@earendil-works/pi-ai': resolve(packageRoot, 'node_modules/@earendil-works/pi-ai/dist/index.js'),
+    // Match Pi's extension-facing view, including its TypeBox exports.
+    '@earendil-works/pi-ai': resolve(packageRoot, 'dist/core/extensions/pi-ai-extension-view.js'),
     '@earendil-works/pi-tui': resolve(packageRoot, 'node_modules/@earendil-works/pi-tui/dist/index.js'),
 } });
 const extension = await jiti.import(fileURLToPath(new URL('./index.ts', import.meta.url)));
 
 async function until(predicate) {
     const end = Date.now() + 4000;
-    while (!predicate()) {
+    while (!(await predicate())) {
         if (Date.now() > end) throw new Error('extension test timed out');
         await new Promise(resolve => setTimeout(resolve, 15));
     }
@@ -64,7 +65,8 @@ test('public/private tools, picker keys, foreground detach and shutdown', async 
         assert.ok(messages.every(message => !message.content.includes('hidden')));
         assert.equal((await list())[0].command, '[private !! session]');
         await assert.rejects(snapshot('pty-2'), /Private/);
-        await until(() => messages.length === 2);
+        // PTY startup and screen parsing are asynchronous, especially under load.
+        await until(async () => /public/.test((await snapshot('pty-1')).screen));
         await commands.get('top').handler('', ctx);
         // Attach using the real raw-input handler but a mocked Pi TUI. Only the
         // explicit focused input goes to the PTY; Ctrl+Z detaches without SIGTSTP.

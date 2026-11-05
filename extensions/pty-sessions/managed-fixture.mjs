@@ -12,7 +12,8 @@ const { createJiti } = require('jiti');
 const root = resolve(dirname(executable), '../..');
 export const builtinBash = (await import(resolve(root, 'dist/index.js'))).createBashToolDefinition;
 export const jiti = createJiti(import.meta.url, { alias: {
-    '@earendil-works/pi-ai': resolve(root, 'node_modules/@earendil-works/pi-ai/dist/index.js'),
+    // Match Pi's extension-facing view, including its TypeBox exports.
+    '@earendil-works/pi-ai': resolve(root, 'dist/core/extensions/pi-ai-extension-view.js'),
     '@earendil-works/pi-tui': resolve(root, 'node_modules/@earendil-works/pi-tui/dist/index.js'),
 } });
 const { default: extension } = await jiti.import(fileURLToPath(new URL('./index.ts', import.meta.url)));

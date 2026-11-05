@@ -7,7 +7,7 @@ of this repository.
 
 ## Requirements and installation
 
-- Pi **1.3.0** on Linux, running in fullscreen mode for mouse/navigation features.
+- Pi **1.5.0** on Linux, running in fullscreen mode for mouse/navigation features.
 - Node.js **22.23+**, npm, Python 3, and Zsh. Native `node-pty` installation may
   require a C/C++ compiler and Python if a suitable prebuilt binary is unavailable.
 - An external editor (`VISUAL`, then `EDITOR`, then `vim` for output editing).
@@ -655,7 +655,7 @@ Python suites. Integration tests locate Pi through `PATH`. The shell-color test
 expects its runtime patch to have been applied by `install.sh`.
 
 Several UI features use internal Pi layout, component and URL-dispatch hooks.
-They are tested against Pi 1.3.0 and may need updates after Pi upgrades. Keep this
+They are tested against Pi 1.5.0 and may need updates after Pi upgrades. Keep this
 folder intact when extracting it: no source/test path depends on the parent
 project. The parent devcontainer only supplies CLI/system dependencies, persists
 the agent directory, sets the editor, and invokes `install.sh`.
