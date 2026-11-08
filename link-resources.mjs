@@ -6,7 +6,7 @@ export const resources = [
     ...[
         "clion-file-actions", "compact-tools", "output-editor", "kitty-clipboard",
         "shared", "extract", "zsh-completion", "shell-colors", "notifications",
-        "pty-sessions", "message-selection",
+        "pty-sessions", "message-selection", "image-viewer",
     ].map(name => `extensions/${name}`),
     "skills/subagent",
     "prompts/subagent.md",

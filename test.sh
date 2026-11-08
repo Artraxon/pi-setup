@@ -7,6 +7,7 @@ node --test \
     configure.test.mjs \
     link-resources.test.mjs \
     extensions/kitty-clipboard/*.test.mjs \
+    extensions/image-viewer/*.test.mjs \
     extensions/pty-sessions/*.test.mjs \
     extensions/notifications/*.test.mjs \
     extensions/shared/*.test.mjs \

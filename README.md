@@ -78,6 +78,7 @@ extensions/
   clion-file-actions/   Inline JetBrains IDE navigation and /clion
   compact-tools/       One-line collapsed tool summaries
   extract/             Editor capture and extraction with a separate model
+  image-viewer/        Click-to-enlarge images, zoom and pan in the terminal
   kitty-clipboard/     In-memory host clipboard attachments over Kitty SSH
   message-selection/   Ctrl+K/J transcript selection into the prompt
   notifications/       Labeled local sockets, shared inbox and report renderer
@@ -382,6 +383,70 @@ reload/eviction, inspect or resume saved sessions by their filesystem paths.
 Read-only task instructions are not a security sandbox; explicitly scope
 permissions. Do not paste over a user draft or blindly retry input. Useful
 children stay open for further work rather than exiting after the first answer.
+
+## Click-to-enlarge images
+
+In **fullscreen Pi**, left-click a displayed image to open a focused foreground
+viewer. It starts at native resolution if it fits; larger images are scaled down
+to fit the terminal, reserving one row for controls. Small images are not enlarged
+by default. The transcript and draft remain untouched.
+
+- **+ / -** (also **=**) zoom in/out, or use **Ctrl+mouse wheel**.
+- **Arrow keys** pan when zoomed beyond the viewport; **0** resets to native/fit.
+- **q / Escape** close the viewer and restore the previous focus and inline images.
+- **/image** opens the latest rendered image; **/image N** opens the Nth image
+  (oldest is 1). This is also the keyboard route in regular/scrollback mode,
+  where Pi leaves mouse clicks to the terminal.
+
+Requires a terminal with **Kitty graphics** support and Pi image display enabled.
+Works with Pi running remotely over SSH in Kitty: PNG bytes use direct chunked
+terminal transfer, never local filenames, shared memory, an external GUI viewer,
+or Kitty remote control. Subsequent zoom/pan changes reuse the uploaded image and
+send only new placement/crop controls. The remote viewer needs no `kitten` binary.
+Kitty must forward Ctrl+wheel to the application rather than intercepting it in a
+terminal mapping; keyboard zoom remains available regardless. Resizing keeps the
+viewer within the terminal; zooming beyond its bounds crops instead of spilling
+into the transcript. Terminal column/row or cell-pixel changes renew the image
+upload for both foreground and inline images, rather than relying on a graphics
+ID that the terminal may have discarded. This also covers height-only resizing
+and shrinking to a single row before expanding again; ordinary zoom/pan does not
+re-upload the PNG.
+
+Pi 1.5's fullscreen renderer also needs cache invalidation before **every full
+screen clear**, including forced redraws with unchanged terminal dimensions (for
+example when closing the viewer). Its normal command order deletes placements
+and then emits ED 2 (`CSI 2 J`), which frees Kitty's now-unplaced image data. The
+extension invalidates the renderer's uploaded-image cache before preparing that
+frame, so it sends PNG data rather than stale placement-only commands. Partial
+redraws retain upload reuse. The hook is restored on reload/shutdown.
+
+A minimal unpatched-renderer reproduction (from this checkout) is:
+
+```sh
+node extensions/image-viewer/repro.mjs /absolute/path/to/image.png
+```
+
+This starts only the installed Pi TUI library: no extensions, settings, model or
+API calls. In Kitty, wait for the PNG, then press **r** to force a full redraw at
+the same size. On unpatched Pi TUI 1.5.0, the PNG disappears while the text stays;
+**q/Escape** quits. Height-only terminal resizing exercises the same cache path.
+Width changes may regenerate the image transmission and mask the bug. A regular
+Pi session with extensions disabled and a previously displayed PNG also suffices;
+the standalone script simply removes session/model setup and supplies a reliable
+forced-redraw key.
+
+The extension isolates its compatibility bridge to Pi's current `Image` component
+in its entry point. Hooks are restored on reload/shutdown, and pending
+image conversion cannot reopen a viewer after session replacement. Tests exercise
+real fullscreen SGR click/wheel routing (including images below compact tool
+summaries), overlay compositing, upload reuse, shrink/expand upload recovery,
+resize/cropping, keyboard controls and lifecycle cleanup. A small graphics-state
+oracle follows the **emitted commands**, including screen clears that free image
+data, and verifies repeated open/resize/close/full-redraw cycles restore actual
+placements rather than merely leaving a clickable image line in the TUI. The bridge also forwards
+the self-shell tool renderer's image area, which Pi's text-only mouse delegation
+otherwise skips. A live Kitty/SSH visual check is still needed when changing
+terminal versions or mappings.
 
 ## Host clipboard images through Kitty over SSH
 
