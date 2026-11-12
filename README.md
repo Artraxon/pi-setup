@@ -80,6 +80,7 @@ extensions/
   extract/             Editor capture and extraction with a separate model
   image-viewer/        Click-to-enlarge images, zoom and pan in the terminal
   kitty-clipboard/     In-memory host clipboard attachments over Kitty SSH
+  kitty-scrollbar/     Inset transcript scrollbar in Kitty SSH sessions
   message-selection/   Ctrl+K/J transcript selection into the prompt
   notifications/       Labeled local sockets, shared inbox and report renderer
   output-editor/       Edit response/block text into the prompt
@@ -92,6 +93,27 @@ extensions/
 Tests live beside their extension. Dependencies and generated caches are ignored.
 The installer links whole managed resource directories. Tests remain beside the
 source; Pi loads each extension's `index.ts`, not the adjacent test files.
+
+## Kitty SSH scrollbar inset
+
+In fullscreen Pi inside Kitty over SSH, the transcript reserves a **one-column
+right gutter**. This moves Pi's scrollbar clear of Kitty's native scrollbar hit
+area without disabling Kitty's scrollbar or changing the editor/footer width.
+Regular mode, non-Kitty terminals, and local Kitty sessions are left unchanged.
+
+Detection recognizes `SSH_CONNECTION`, `SSH_CLIENT`, `SSH_TTY`, or
+`KITTY_SSH_KITTEN_DATA_DIR`. For devcontainer launchers that drop those markers,
+it also recognizes Kitty's standard `kitty-ssh-kitten/kitty/bin` helper PATH when
+`KITTY_PID` is absent. `SSH_AUTH_SOCK` alone does not count as a remote session.
+
+The gutter follows resizes and regular/fullscreen mode switches. Reload and
+shutdown restore the original layout; no Pi runtime files or Kitty settings are
+patched. The bridge guards access to Pi 1.5's internal fullscreen layout root and
+composes the inset with built-in stacks, keeping the rendered track and mouse
+hit-testing at the same column. Tested against Pi 1.5.2.
+
+After adding this extension, rerun the resource linker (or installer), then use
+`/reload`. As with other setup extensions, save active managed PTY work first.
 
 ## Managed processes and interactive PTY sessions
 
