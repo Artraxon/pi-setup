@@ -19,7 +19,7 @@ const { tokenLabel, compactTools } = new Function("stripTerminalSequences", "Tex
 const theme = { fg: (_token: string, text: string) => text };
 function renderer(name: string, original?: any) {
 	let resolver: any;
-	compactTools({ registerToolRenderer(fn: any) { resolver = fn; } });
+	compactTools({ on() {}, registerToolRenderer(fn: any) { resolver = fn; } });
 	return resolver(name, () => original);
 }
 

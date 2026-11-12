@@ -14,7 +14,7 @@ test('collapsed full-screen previews suppress child startup headers, including a
     await until(async () => (await s.snapshot(job.id)).screen.includes('CHILD_PI_STARTUP'));
     assert.ok(!render(s).includes('CHILD_PI_STARTUP'));
     assert.ok(render(s).includes(job.id));
-    assert.match(render(s), /Ctrl\+click to attach/);
+    assert.match(render(s), /Ctrl\+click expands\/collapses/);
     assert.ok(render(s, true).includes('CHILD_PI_STARTUP'));
     const write = process.stdout.write;
     process.stdout.write = () => true;

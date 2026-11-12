@@ -10,4 +10,5 @@ node "$root_dir/configure.mjs"
 npm ci --prefix "$root_dir/extensions/pty-sessions" --no-audit --no-fund
 node "$root_dir/link-resources.mjs"
 python3 "$root_dir/extensions/shell-colors/install.py"
+python3 "$root_dir/extensions/compact-tools/install.py"
 python3 "$root_dir/extensions/message-selection/install-keybindings.py"

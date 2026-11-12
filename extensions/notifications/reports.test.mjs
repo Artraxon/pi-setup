@@ -54,6 +54,21 @@ test('explicit expansion shows complete report text without the default custom-m
     assert.ok(!full.includes('Untrusted'));
 });
 
+test('compact activity hides reports without changing notification content or losing expanded history', () => {
+    let mode = 'compact', render;
+    registerNotificationReports({ registerMessageRenderer(_name, fn) { render = fn; } }, () => mode === 'compact');
+    const data = message(), before = JSON.stringify(data);
+    for (const expanded of [false, true]) {
+        const component = render(data, { expanded }, theme);
+        assert.deepEqual(component.render(100), []);
+        mode = 'inline';
+        assert.match(component.render(100).join('\n'), /INITIAL_REVIEW_DONE/);
+        mode = 'compact';
+        assert.deepEqual(component.render(100), []);
+    }
+    assert.equal(JSON.stringify(data), before);
+});
+
 test('legacy or malformed display metadata still falls back to a compact single line', () => {
     for (const data of [
         { content: 'legacy\nmessage' },

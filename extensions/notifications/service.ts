@@ -17,7 +17,7 @@ export function getNotificationService(pi: ExtensionAPI) {
     const delivery = new NotificationDelivery(pi, channel, () => context, () => {
         try { context?.ui.notify('Notification delivery failed; retained for a later retry.', 'warning'); } catch {}
     });
-    registerNotificationReports(pi);
+    registerNotificationReports(pi, () => context?.mode === 'tui' && context.ui.getActivityDisplayMode?.() === 'compact');
     const service = {
         version: 3,
         get closed() { return channel.closed; },

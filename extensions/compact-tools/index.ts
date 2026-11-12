@@ -1,5 +1,11 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { installCompactSettings, loadCompactActivityEnabled } from "./settings.ts";
+
+type ActivityUI = ExtensionContext["ui"] & {
+	setCompactActivityEnabled?(enabled: boolean): void;
+	setActivityDisplayMode?(mode: "compact" | "inline" | "expanded"): void;
+};
 
 function singleLine(value: unknown): string {
 	return stripTerminalSequences(String(value ?? "")).replace(/[\x00-\x1f\x7f-\x9f]/g, " ").replace(/\s+/g, " ").trim();
@@ -25,6 +31,23 @@ function tokenLabel(count: unknown): string {
 }
 
 export default function compactTools(pi: ExtensionAPI) {
+	let removeSettings: (() => void) | undefined;
+	pi.on("session_start", (_event, ctx) => {
+		if (ctx.mode !== "tui") return;
+		const apply = (enabled: boolean) => {
+			const ui = ctx.ui as ActivityUI;
+			if (ui.setCompactActivityEnabled) ui.setCompactActivityEnabled(enabled);
+			else if (!enabled) ui.setActivityDisplayMode?.("inline");
+		};
+		try { apply(loadCompactActivityEnabled()); }
+		catch (error) { ctx.ui.notify(`Compact activity settings: ${error instanceof Error ? error.message : String(error)}`, "warning"); }
+		ctx.ui.setWidget("compact-settings-host", (tui, theme) => {
+			removeSettings?.();
+			removeSettings = installCompactSettings(tui, theme, ctx, apply);
+			return { render: () => [], invalidate() {} };
+		});
+	});
+	pi.on("session_shutdown", () => { removeSettings?.(); removeSettings = undefined; });
 	pi.registerToolRenderer((name, next) => {
 		const original = next();
 		return {

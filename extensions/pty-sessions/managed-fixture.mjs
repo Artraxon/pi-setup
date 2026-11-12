@@ -16,7 +16,8 @@ export const jiti = createJiti(import.meta.url, { alias: {
     '@earendil-works/pi-ai': resolve(root, 'dist/core/extensions/pi-ai-extension-view.js'),
     '@earendil-works/pi-tui': resolve(root, 'node_modules/@earendil-works/pi-tui/dist/index.js'),
 } });
-const { default: extension } = await jiti.import(fileURLToPath(new URL('./index.ts', import.meta.url)));
+const { default: extension, formatProcessElapsed } = await jiti.import(fileURLToPath(new URL('./index.ts', import.meta.url)));
+export { formatProcessElapsed };
 export const settings = await jiti.import(fileURLToPath(new URL('./settings.ts', import.meta.url)));
 export const extractSettings = await jiti.import(fileURLToPath(new URL('../extract/settings.ts', import.meta.url)));
 export async function until(predicate, timeout = 5000) {
@@ -31,11 +32,14 @@ export function setup(t, mode = 'tui') {
     const previous = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = directory;
     const events = new Map(), commands = new Map(), tools = new Map(), renderers = new Map(), messages = [], notices = [];
-    const state = { directory, events, commands, tools, renderers, messages, notices, autoDeliver: true };
+    const widgets = new Map();
+    const state = { directory, events, commands, tools, renderers, messages, notices, widgets,
+        activityDisplayMode: 'inline', outputPad: 1, autoDeliver: true };
     const bus = new EventEmitter();
     const eventBus = { emit: (name, data) => bus.emit(name, data), on(name, fn) { bus.on(name, fn); return () => bus.off(name, fn); } };
     extension({
         events: eventBus,
+        getSettings: () => ({ outputPad: state.outputPad }),
         on(name, handler) {
             const previous = events.get(name);
             events.set(name, previous ? (...args) => { const value = previous(...args); return handler(...args) ?? value; } : handler);
@@ -54,7 +58,9 @@ export function setup(t, mode = 'tui') {
     const ctx = { mode, cwd: directory, isIdle: () => true,
         model: { provider: 'test', id: 'current-model' }, thinkingLevel: 'low',
         sessionManager: { getSessionId: () => 'test-session', getSessionFile: () => undefined },
-        ui: { setWidget(_key, factory) { factory(tui, theme); }, notify(message) { notices.push(message); },
+        ui: { setWidget(key, factory) { widgets.set(key, factory(tui, theme)); },
+            getActivityDisplayMode: () => state.activityDisplayMode,
+            notify(message) { notices.push(message); },
             custom(factory) { return new Promise(resolve => { state.dialog = factory(tui, theme, {}, resolve); }); } },
     };
     t.after(() => {

@@ -4,7 +4,7 @@ import { stripTerminalSequences, Text, truncateToWidth } from '@earendil-works/p
 const singleLine = (value: string) => stripTerminalSequences(value)
     .replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim();
 
-export function registerNotificationReports(pi: ExtensionAPI) {
+export function registerNotificationReports(pi: ExtensionAPI, compactDisplay: () => boolean = () => false) {
     pi.registerMessageRenderer('process-message', (message, options, theme) => {
         const data = (message.details as { notifications?: unknown } | undefined)?.notifications;
         const reports = Array.isArray(data) ? data.flatMap(entry =>
@@ -14,12 +14,13 @@ export function registerNotificationReports(pi: ExtensionAPI) {
             ? message.content.filter(part => part?.type === 'text' && typeof part.text === 'string').map(part => part.text).join(' ') : '';
         const lines = reports.length ? reports : [singleLine(fallback) || 'Process message'];
         const icon = theme.fg('customMessageLabel', '↩ ');
-        if (options.expanded) return new Text(lines.map(line => icon + theme.fg('muted', line)).join('\n'), 0, 0);
+        const expanded = options.expanded ? new Text(lines.map(line => icon + theme.fg('muted', line)).join('\n'), 0, 0) : undefined;
         return {
             render(width: number) {
-                return [truncateToWidth(icon + theme.fg('muted', lines.join(' ; ')), width, '…')];
+                if (compactDisplay()) return [];
+                return expanded?.render(width) ?? [truncateToWidth(icon + theme.fg('muted', lines.join(' ; ')), width, '…')];
             },
-            invalidate() {},
+            invalidate() { expanded?.invalidate(); },
         };
     });
 }

@@ -73,7 +73,7 @@ function setup({ compact = false } = {}) {
     if (compact) {
         initTheme('dark', false);
         let resolver;
-        compactTools({ registerToolRenderer(fn) { resolver = fn; } });
+        compactTools({ on() {}, registerToolRenderer(fn) { resolver = fn; } });
         tool = new ToolExecutionComponent('read', 'image-result', { path: '/tmp/demo.png' },
             { imageWidthCells: 10 }, resolver('read', () => undefined), host, '/tmp');
         tool.updateResult({ content: [{ type: 'image', data: picture(), mimeType: 'image/png' }], details: undefined });
@@ -303,9 +303,11 @@ test('actual compact tool-result image receives clicks below the self-rendered t
             s.input('q'); await tick(); s.host.renderNow();
             assert.equal(s.host.hasOverlay(), false);
         }
-        // The compact text still owns its original click-to-expand behavior.
+        // Plain text selection must not expand; Ctrl-click owns expansion.
         assert.equal(s.tool.expanded, false);
         s.input('\x1b[<0;1;2M'); s.input('\x1b[<0;1;2m');
+        assert.equal(s.tool.expanded, false);
+        s.input('\x1b[<16;1;2M'); s.input('\x1b[<16;1;2m');
         assert.equal(s.tool.expanded, true);
         assert.equal(s.host.hasOverlay(), false);
     } finally { s.cleanup(); }

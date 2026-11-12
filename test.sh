@@ -6,6 +6,7 @@ npm ci --prefix extensions/pty-sessions --no-audit --no-fund
 node --test \
     configure.test.mjs \
     link-resources.test.mjs \
+    extensions/compact-tools/*.test.mjs \
     extensions/kitty-clipboard/*.test.mjs \
     extensions/kitty-scrollbar/*.test.mjs \
     extensions/image-viewer/*.test.mjs \
@@ -31,6 +32,7 @@ node --experimental-strip-types --test \
     extensions/compact-tools/index.test.ts \
     extensions/extract/core.test.ts \
     extensions/extract/editor.test.ts
+python3 -m unittest discover -s extensions/compact-tools -p 'test_*.py' -v
 python3 -m unittest discover -s extensions/zsh-completion -p 'test_*.py' -v
 bash -n install.sh
 zsh -n extensions/zsh-completion/complete.zsh

@@ -7,7 +7,8 @@ of this repository.
 
 ## Requirements and installation
 
-- Pi **1.5.0** on Linux, running in fullscreen mode for mouse/navigation features.
+- Upstream Node/npm Pi **1.5.2** on Linux, running in fullscreen mode for
+  mouse/navigation features. The compact-activity runtime patch is version-pinned.
 - Node.js **22.23+**, npm, Python 3, and Zsh. Native `node-pty` installation may
   require a C/C++ compiler and Python if a suitable prebuilt binary is unavailable.
 - An external editor (`VISUAL`, then `EDITOR`, then `vim` for output editing).
@@ -61,6 +62,14 @@ Run `/reload` after updating extensions. **Save active PTY work first:** reload
 terminates all managed processes and clears their retained output/logs. The native shell
 color patch changes Pi runtime files and requires a **Pi restart**, not just
 `/reload`. Rerun the installer after updating Pi.
+
+Compact activity is installed directly into the normal upstream Pi runtime by
+`extensions/compact-tools/install.py`. It requires no Pi fork, source checkout,
+TypeScript compiler, or separate Pi build. It backs up and verifies the affected
+runtime files and uses upstream's unbundled entry point for the patched UI.
+Restart Pi after installation; `/reload` does not replace the running core.
+After a Pi update, rerun the installer. Unsupported versions or modified runtime
+files fail visibly rather than applying an uncertain patch.
 
 The changing managed-process backend helpers deliberately use TypeScript: Pi's
 loader refreshes those on reload, whereas native ESM helpers can remain cached
@@ -170,8 +179,8 @@ Previews refresh at most about 12 times/second.
 
 | Control | Action |
 | --- | --- |
-| Ctrl+O | Expand/collapse previews alongside tool output |
-| Ctrl+click a preview | Attach to a TTY or view pipe output |
+| Ctrl+O | Compact → inline summaries → expanded → compact |
+| Ctrl+click a process row, preview, or tool summary | Expand/collapse its output; plain pointer selection is untouched |
 | `/fg [id]` | Attach to a TTY; open a read-only live viewer for pipe processes |
 | Ctrl+Z while attached | Detach without stopping/suspending the process |
 | Ctrl+C while attached | Interrupt that session; pipe viewers also support Ctrl+C |
@@ -693,6 +702,77 @@ main model. No conversation history or tools are sent to the side model. Tool
 arguments can be retained by Pi (including nested-call metadata); this is not a
 secret-storage mechanism. Never send private PTY output or credentials.
 
+## Compact activity view
+
+The setup installer adds a default **compact** view to upstream Pi: the transcript retains user prompts
+and assistant responses, while current reasoning and executing tools appear in
+an updating activity area above the prompt. Background managed processes stack
+there as separate rows, using their latest `pi-process status` text (or command
+when no status is set). Finished jobs leave the live area; their results and
+completion notifications remain in session/model history. Process notification
+reports are also hidden in compact mode and restored by expansion.
+
+The native **Working** indicator stays in the prompt border. Thinking updates
+use Pi's Markdown renderer, including bold and inline code. Activity and process
+rows share normal output padding, with one blank line above and below the visible
+activity block. The spacing stays the same whether Working is spinning or idle. Process rows have no bullet marker.
+
+Automatic activity-list updates are batched every **500 ms**, without slowing
+response streaming or the native Working animation. Explicit Ctrl-clicks, view
+changes, and resizing refresh immediately. Process headers use the compact format
+`pty-4 0:12 Working (turn 1)`, with elapsed process time and single spaces rather
+than dot separators. Quiet processes still update their elapsed timers.
+
+**Ctrl+click** a process row to expand/collapse a bounded live-output preview;
+only one is expanded at a time. Ctrl-click also expands inline tool and report
+summaries. Plain clicks/drags remain available for selection/copying. Use `/fg`
+to attach to a terminal or open the full viewer. Private process contents open
+only in their explicit user-owned viewer, not in the redacted activity list.
+
+**`/settings` → Compact activity** is a binary On/Off switch, default **On**.
+It applies immediately and is saved in
+`${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/compact-tools.json`:
+
+```json
+{ "activityEnabled": false }
+```
+
+Off restores inline one-line summaries and the ordinary two-state Ctrl+O
+expand/collapse behavior. It disables the above-prompt activity pane, not the
+existing one-line tool renderer. Editing the file directly takes effect on
+reload/restart.
+
+With Compact activity **On**, **Ctrl+O** (the configurable `app.tools.expand`
+binding) cycles:
+
+1. **Compact:** live activity above the prompt; no inline thinking/tool/process output.
+2. **Inline:** reasoning and the existing one-line tool summaries in the transcript.
+3. **Expanded:** original full tool renderers and retained process previews.
+4. Back to compact.
+
+No additional model request or local summarization is used. Private `!!` activity
+rows use redacted metadata, never private command/output/status text.
+Use `/fg`, `/top`, and snapshots for the existing process controls. Short terminals
+show a bounded process list with an overflow count.
+
+The complete implementation lives in `extensions/compact-tools/`: a normal tool
+renderer, the activity component, and a version-checked runtime patch installed by
+`install.sh`. The patch supplies the display controls needed to hide thinking and
+tool rows without mutating history. No fork or external build is used. The patch
+currently supports upstream Pi **1.5.2**; the unmodified extension API alone does
+not provide these controls.
+
+To verify or remove only this customization:
+
+```sh
+python3 extensions/compact-tools/install.py --check
+python3 extensions/compact-tools/install.py --uninstall
+```
+
+Uninstall restores the original runtime from `.pre-compact-ui` backups while
+preserving the shell-color patch. Restart afterward. Installation, rollback and
+real-terminal tests are documented in `docs/compact-activity-testing.md`.
+
 ## Output editing and compact tool summaries
 
 - **Alt+G:** open the latest **completed** assistant response in the external
@@ -716,8 +796,12 @@ model usage**. Each number is right-aligned in three characters, keeping tool
 names vertically aligned, without tildes or a separator dot. Labels use compact
 units such as `679`, `2k`, `23k`, or `.8M` (800,000). Unit values are whole numbers
 unless below one, where a single decimal omits the leading zero.
-Pending output uses a dash in the same fixed-width column. Ctrl+O or clicking
-expands the original tool rendering where available.
+Pending output uses a dash in the same fixed-width column. With the runtime patch
+installed, these summaries are the middle Ctrl+O view; the next press expands the
+original tool rendering. Without the patch, Pi retains its normal two-state
+expand/collapse shortcut.
+Ctrl-click expands individual tool/preview summaries; ordinary clicks and drags
+do not toggle expansion, so they can be used for selecting text.
 
 ## Zsh completion
 

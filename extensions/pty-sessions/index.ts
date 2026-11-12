@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { MouseRegion, matchesKey, stripTerminalSequences, truncateToWidth } from '@earendil-works/pi-tui';
+import { matchesKey, stripTerminalSequences, truncateToWidth, type TuiMouseEvent } from '@earendil-works/pi-tui';
 import { Type } from '@earendil-works/pi-ai';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -11,8 +11,19 @@ import { installProcessSettings } from './settings.ts';
 import { registerSubagentResult } from './subagent-result.ts';
 import { getNotificationService } from '../notifications/service.ts';
 
+// pi-setup's compact-tools runtime patch supplies the activity view. Unpatched
+// Pi retains its existing previews without probing private TUI state.
+type ActivityUI = ExtensionContext['ui'] & { getActivityDisplayMode?(): 'compact' | 'inline' | 'expanded' };
+
 function label(value: string): string {
     return stripTerminalSequences(value).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
+}
+
+export function formatProcessElapsed(createdAt: string, now = Date.now()): string {
+    const seconds = Math.max(0, Math.floor((now - Date.parse(createdAt)) / 1000));
+    const minutes = Math.floor(seconds / 60);
+    const tail = String(seconds % 60).padStart(2, '0');
+    return minutes < 60 ? `${minutes}:${tail}` : `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}:${tail}`;
 }
 
 export default function ptySessions(pi: ExtensionAPI) {
@@ -23,6 +34,8 @@ export default function ptySessions(pi: ExtensionAPI) {
     const exitCleanup = () => { try { sessions.dispose(); } catch {} };
     let shuttingDown = false;
     let context: ExtensionContext | undefined;
+    const compactDisplay = () => context?.mode === 'tui' &&
+        (context.ui as ActivityUI).getActivityDisplayMode?.() === 'compact';
     let attached: string | undefined;
     let recent: string | undefined;
     let finishAttach: (() => void) | undefined;
@@ -192,6 +205,7 @@ export default function ptySessions(pi: ExtensionAPI) {
         const status = details?.signal ? `signal ${details.signal}` : `exit ${details?.exitCode ?? '?'}`;
         return {
             render(width: number) {
+                if (compactDisplay()) return [];
                 // Match the existing compact process-message notification style.
                 const arrow = theme.fg('customMessageLabel', '↩ ');
                 const failed = !!details?.signal || details?.exitCode !== 0 || !!details?.timedOut;
@@ -209,6 +223,7 @@ export default function ptySessions(pi: ExtensionAPI) {
         const id = (message.details as { id: string }).id;
         const content = {
             render(width: number) {
+                if (compactDisplay()) return [];
                 const session = sessions.sessions.get(id);
                 if (!session) return options.expanded ? [truncateToWidth(theme.fg('muted', `${id} · PTY unavailable after restart/reload`), width)] : [];
                 // Completion has its own compact summary. Keep the output only
@@ -228,15 +243,13 @@ export default function ptySessions(pi: ExtensionAPI) {
                 const visible = options.expanded ? lines.slice(0, end) : lines.slice(Math.max(0, end - 8), end);
                 return [truncateToWidth(theme.fg('muted', header), width),
                     ...visible.map(line => truncateToWidth(line, width)),
-                    truncateToWidth(theme.fg('muted', `Ctrl+O ${options.expanded ? 'collapses' : 'expands'} · Ctrl+click to ${session.tty ? 'attach' : 'view'} · /fg · /top`), width)];
+                    truncateToWidth(theme.fg('muted', 'Ctrl+click expands/collapses · /fg to attach/view · /top'), width)];
             },
             invalidate() {},
         };
-        return new MouseRegion(content, event => {
-            if (!event.ctrl || event.button !== 'left') return;
-            if (event.type === 'press') return { handled: true, render: false };
-            if (event.type === 'click' && context) { void attach(id, context); return { handled: true }; }
-        });
+        // The runtime CustomMessageComponent owns Ctrl-click expansion, leaving
+        // ordinary pointer selection untouched. /fg retains terminal attachment.
+        return content;
     });
 
     pi.on('session_start', (_event, ctx) => {
@@ -252,12 +265,79 @@ export default function ptySessions(pi: ExtensionAPI) {
                 sessionFile: ctx.sessionManager.getSessionFile?.(), isActive: () => [...sessions.sessions.values()].some(s => s.running) });
         }
         if (ctx.mode !== 'tui') return;
-        // Invisible factory obtains the host TUI for stop/start and repaints.
+        // Retain the host TUI for stop/start and render live background jobs in
+        // the fixed above-editor area, never as accumulating transcript output.
         ctx.ui.setWidget('pty-host', (tui, theme) => {
             removeSettings?.();
             host = tui;
             removeSettings = installProcessSettings(tui, theme, ctx);
-            return { render: () => [], invalidate() {} };
+            let expanded: string | undefined;
+            let pressed: string | undefined;
+            let rowIds: Array<string | undefined> = [];
+            let interactionRevision = 0;
+            return {
+                // The compact snapshotter uses this only for explicit user actions;
+                // normal output/status/timer updates remain batched at 500 ms.
+                getActivityRevision: () => interactionRevision,
+                render(width: number) {
+                    rowIds = [];
+                    if (!compactDisplay()) { expanded = undefined; return []; }
+                    // list() redacts !! commands/status. UI-only placement must
+                    // not accidentally weaken the managed-process privacy boundary.
+                    const active = sessions.list().filter(session => session.running && session.background &&
+                        !sessions.sessions.get(session.id)?.attached).reverse();
+                    if (!active.some(session => session.id === expanded)) expanded = undefined;
+                    const limit = Math.max(1, Math.floor(tui.terminal.rows / 4));
+                    const previewRows = Math.max(1, Math.min(8, tui.terminal.rows - Math.min(active.length, limit) - 10));
+                    // Match SettingsManager.getOutputPad(): upstream supports 0 or 1.
+                    const prefix = pi.getSettings().outputPad === 0 ? '' : ' ';
+                    const lines: string[] = [];
+                    const push = (id: string | undefined, line: string) => {
+                        lines.push(truncateToWidth(prefix + line, width, '…'));
+                        rowIds.push(id);
+                    };
+                    for (const entry of active.slice(0, limit)) {
+                        push(entry.id, theme.fg('muted', `${entry.id} ${formatProcessElapsed(entry.createdAt)} ${label(entry.statusText || entry.command)}`));
+                        const session = sessions.sessions.get(entry.id);
+                        if (expanded === entry.id && session && !entry.private) {
+                            const output = screenLines(session);
+                            while (output.length && !stripTerminalSequences(output[output.length - 1]).trim()) output.pop();
+                            for (const line of output.slice(-previewRows)) push(entry.id, line);
+                            push(entry.id, theme.fg('dim', 'Ctrl+click to collapse · /fg to attach/view'));
+                        }
+                    }
+                    if (active.length > limit) push(undefined, theme.fg('dim',
+                        `+${active.length - limit} background processes · /top`));
+                    return lines;
+                },
+                handleMouse(event: TuiMouseEvent) {
+                    if (shuttingDown || !context || !compactDisplay() || !event.ctrl || event.button !== 'left') return;
+                    if (event.type === 'press') {
+                        pressed = rowIds[event.y];
+                        return pressed ? { handled: true, render: false } : undefined;
+                    }
+                    if (event.type !== 'click') return;
+                    const id = pressed ?? rowIds[event.y];
+                    pressed = undefined;
+                    if (!id) return;
+                    const session = sessions.sessions.get(id);
+                    if (!session) return { handled: true };
+                    interactionRevision++;
+                    if (session.privateOutput || !session.running) {
+                        // Private content remains in its explicit user-owned viewer,
+                        // never in the redacted compact list or model context.
+                        void attach(id, context).catch(error => {
+                            if (!shuttingDown) context?.ui.notify(label(String(error)), 'warning');
+                        }).finally(() => {
+                            if (!shuttingDown) { interactionRevision++; host?.requestRender(); }
+                        });
+                    } else {
+                        expanded = expanded === id ? undefined : id;
+                    }
+                    return { handled: true };
+                },
+                invalidate() {},
+            };
         });
     });
     pi.on('session_shutdown', () => {

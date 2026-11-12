@@ -86,14 +86,13 @@ test('public/private tools, picker keys, foreground detach and shutdown', async 
         assert.match((await snapshot('pty-1')).screen, /public/);
         const preview = previewRenderer(messages[0], {}, { fg: (_color, text) => text });
         assert.ok(preview.render(60).length <= 10);
-        const mouse = { type: 'click', button: 'left', ctrl: true, alt: false, shift: false,
-            x: 0, y: 0, width: 60, height: 10, screenX: 0, screenY: 0 };
-        assert.equal(preview.handleMouse({ ...mouse, ctrl: false }), undefined);
+        assert.equal(preview.handleMouse, undefined, 'the core summary component owns Ctrl-click expansion');
         process.stdout.write = () => true;
         try {
-            assert.equal(preview.handleMouse(mouse).handled, true);
+            const attachment = commands.get('fg').handler('pty-1', ctx);
             await until(() => stopped);
             process.stdin.emit('data', Buffer.from('\x03'));
+            await attachment;
             await until(() => !stopped);
         } finally {
             process.stdout.write = originalWrite;
