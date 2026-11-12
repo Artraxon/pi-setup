@@ -450,8 +450,11 @@ terminal versions or mappings.
 
 ## Host clipboard images through Kitty over SSH
 
-With Pi running in Kitty, **Ctrl+V** captures the host's clipboard PNG directly
-into memory with `kitten clipboard --get-clipboard --mime image/png /dev/stdout`.
+With Pi running in Kitty, **Ctrl+V** reads the host clipboard through Kitty's
+**OSC 5522 clipboard protocol** directly into memory. No `kitten` executable,
+subprocess, desktop clipboard utility, or display access is needed on the machine
+running Pi. The bridge lists available MIME types and reads one supported image,
+preferring PNG, then JPEG, WebP, and GIF.
 The native editor receives a removable `[#image <short-id>]` marker at the cursor;
 existing draft text and cursor placement are preserved. Nothing is submitted or
 uploaded until you submit the prompt. No temporary image file, path mapping,
@@ -467,17 +470,29 @@ preserved. Other extensions' or RPC prompts never pick up draft attachments.
 Submitted images are saved/sent through Pi's normal session/provider pipeline;
 "in memory" describes staging, not a promise of no session persistence.
 
-Requirements: `kitten` must be on the **remote** PATH (Kitty's SSH kitten supplies
-it in this environment). Allow Kitty's clipboard-access prompt when asked. Copy
-an **image**, rather than a file-manager file reference or text. This bridge
-handles image paste only; ordinary terminal text paste (Ctrl+Shift+V / Cmd+V) is
-unchanged. Other terminals retain their native Ctrl+V, and RPC/print modes do not
-access the clipboard. Paster is not required.
+Requirements: a Kitty terminal implementing OSC 5522 (tested with Kitty 0.50.0),
+with Pi connected to its terminal, directly or through ordinary SSH. `kitten ssh`
+is not required. Allow Kitty's clipboard-access prompt when asked; the extension
+does not change clipboard permissions or use stored passwords. Copy an **image**,
+rather than a file-manager file reference or text. This bridge handles image paste
+only; ordinary terminal text paste (Ctrl+Shift+V / Cmd+V) is unchanged. Other
+terminals retain their native Ctrl+V, and RPC/print modes do not access the
+clipboard. Paster is not required. Multiplexers must forward OSC 5522 requests
+and replies; tmux/screen support is not assumed or tested.
 
-Pi temporarily stops its TUI while kitten owns the controlling terminal,
-restoring and redrawing it even on errors. Binary stdout and helper diagnostics
-are captured, never printed into Pi. Clipboard reads have a 30-second timeout
-and 64 MiB limit; staged draft images are bounded to 32 images / 64 MiB total.
+Pi stays running while the asynchronous terminal exchange completes. Replies are
+correlated with unique IDs; late replies in the extension's namespace are consumed
+without attaching data to a newer draft. The input filter reassembles slow packets
+including Pi's timed-out OSC fragments, rather than letting headers or base64 data
+become editor text. Permission denial, malformed responses, unsupported image types,
+size overflow and timeout leave the draft unchanged. Submitting while a read is
+pending is blocked with the draft restored; changing editor focus discards the
+result rather than pasting into a dialog.
+
+Each protocol request has a 30-second deadline. Data chunks are validated and
+bounded, with a 64 MiB image limit; staged draft images are bounded to 32 images /
+64 MiB total. The byte cap is not a process-memory cap: decoded buffers, base64
+staging and session serialization can temporarily use additional memory.
 Unreferenced images are reclaimed on the next paste. Reload, shutdown or session
 switch discards staged bytes; a stale marker blocks submission with a warning
 instead of silently sending a prompt without its image. Paste the image again
@@ -485,6 +500,15 @@ or remove the stale marker. Already submitted image content is unaffected.
 The bridge follows Pi's configured `app.clipboard.pasteImage` keybinding
 (default Ctrl+V) without registering a competing shortcut. Input in dialogs and
 attached PTYs is left alone.
+
+Automated real-terminal checks run Kitty under a private Xvfb display with a
+controlled X11 clipboard. They exercise actual permission dialogs, native Pi
+editor submission, slow fragmented replies, and an isolated loopback SSH server,
+without model calls. Run `python3 extensions/kitty-clipboard/test-kitty.py` after
+installing the test-only prerequisites described in the Kitty clipboard testing
+guide under `docs/`. Unit and installed-editor tests remain part of `bash test.sh`.
+After changing the native ESM protocol helper, restart Pi rather than relying on
+`/reload` to refresh that module.
 
 ## Transcript selection into the prompt
 

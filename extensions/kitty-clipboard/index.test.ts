@@ -28,8 +28,10 @@ function harness(capture: () => ImageContent | Promise<ImageContent> = () => ima
         sendUserMessage: () => assert.fail("paste must not submit the draft"),
     } as any, () => { calls.push("capture"); return capture(); });
     const tui = {
-        stop() { calls.push("stop"); }, start() { calls.push("start"); },
-        requestRender(force: boolean) { assert.equal(force, true); calls.push("render"); },
+        stop() { assert.fail("clipboard reads must not stop the TUI"); },
+        start() { assert.fail("clipboard reads must not restart the TUI"); },
+        terminal: { write() {} },
+        requestRender(force?: boolean) { assert.equal(force, undefined); calls.push("render"); },
         getFocusedComponent() { return focused; },
     };
     const ctx: any = { mode: "tui", ui: {
@@ -70,7 +72,7 @@ test("Ctrl+V stages bytes at the cursor in the native editor without files, prev
     const h = harness();
     await h.start();
     assert.deepEqual(await h.key(), { consume: true });
-    assert.deepEqual(h.calls, ["stop", "capture", "start", "paste", "render"]);
+    assert.deepEqual(h.calls, ["capture", "paste", "render"]);
     const text = h.ctx.ui.getEditorText();
     assert.match(text, /^Explain this:  \[#image [a-f0-9]{8}\]  keep this suffix$/);
     assert.deepEqual(h.notices, []);
@@ -81,10 +83,10 @@ test("Ctrl+V stages bytes at the cursor in the native editor without files, prev
     assert.deepEqual(h.subscriptions(), { active: false, unsubscribed: 1 });
 });
 
-test("failure restarts/redraws Pi and leaves the draft unchanged", async () => {
+test("failure leaves Pi running and the draft unchanged", async () => {
     const h = harness(() => { throw new Error("Permission denied"); });
     await h.start(); await h.key();
-    assert.deepEqual(h.calls, ["stop", "capture", "start", "render"]);
+    assert.deepEqual(h.calls, ["capture", "render"]);
     assert.equal(h.ctx.ui.getEditorText(), h.original);
     assert.match(h.notices[0], /Permission denied/);
 });
@@ -158,6 +160,50 @@ test("busy clipboard requests cannot overlap and shutdown discards a late result
     await new Promise(done => setImmediate(done));
     assert.ok(!h.calls.includes("paste") && !h.calls.includes("start"));
     assert.equal(h.ctx.ui.getEditorText(), h.original);
+});
+
+test("submitting while a clipboard read is pending restores the draft without sending a turn", async () => {
+    let resolve!: (value: ImageContent) => void;
+    const h = harness(() => new Promise<ImageContent>(done => { resolve = done; }));
+    await h.start();
+    h.dispatch();
+    h.setDraft("");
+    assert.deepEqual(h.submit(h.original), { action: "handled" });
+    assert.equal(h.ctx.ui.getEditorText(), h.original);
+    resolve(image);
+    await new Promise(done => setImmediate(done));
+    assert.match(h.ctx.ui.getEditorText(), /\[#image /);
+    h.events.get("session_shutdown")();
+});
+
+test("a focus change during a pending read never inserts an image into a dialog", async () => {
+    let resolve!: (value: ImageContent) => void;
+    const h = harness(() => new Promise<ImageContent>(done => { resolve = done; }));
+    await h.start();
+    h.dispatch();
+    h.setFocus({});
+    resolve(image);
+    await new Promise(done => setImmediate(done));
+    assert.equal(h.ctx.ui.getEditorText(), h.original);
+    assert.ok(!h.calls.includes("paste"));
+    assert.match(h.notices[0], /focus changed/);
+    h.events.get("session_shutdown")();
+});
+
+test("late results from a replaced session cannot affect a new session's paste", async () => {
+    const pending: Array<(value: ImageContent) => void> = [];
+    const h = harness(() => new Promise<ImageContent>(done => { pending.push(done); }));
+    await h.start();
+    h.dispatch();
+    await h.start();
+    h.dispatch();
+    pending[0](image);
+    await new Promise(done => setImmediate(done));
+    assert.equal(h.ctx.ui.getEditorText(), h.original);
+    pending[1](image);
+    await new Promise(done => setImmediate(done));
+    assert.equal(h.calls.filter(call => call === "paste").length, 1);
+    h.events.get("session_shutdown")();
 });
 
 test("slash-command fallback stages an image too", async () => {
